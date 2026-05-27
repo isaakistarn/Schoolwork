@@ -1,0 +1,18 @@
+<svg width="512" height="512" viewBox="0 0 512 512" xmlns="http://www.w3.org/2000/svg">
+  <!-- Background -->
+  <rect width="512" height="512" rx="96" fill="#2563EB"/>
+
+  <!-- Graduation cap top -->
+  <polygon points="256,140 392,204 256,268 120,204" fill="#FFFFFF"/>
+
+  <!-- Cap base -->
+  <path d="M160 248 L256 294 L352 248 L352 320 Q256 392 160 320 Z" fill="#FFFFFF"/>
+
+  <!-- Button -->
+  <circle cx="256" cy="204" r="14" fill="#2563EB"/>
+
+  <!-- Tassel -->
+  <path d="M270 210 L360 228 Q380 232 380 254 L380 318" fill="none" stroke="#FFFFFF" stroke-width="12" stroke-linecap="round"/>
+  <circle cx="380" cy="336" r="12" fill="#FFFFFF"/>
+  <path d="M380 348 L372 400 Q372 406 380 406 Q388 406 388 400 Z" fill="#FFFFFF"/>
+</svg>

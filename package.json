@@ -1,0 +1,55 @@
+{
+  "name": "schoolwork-dashboard",
+  "version": "0.2.0",
+  "description": "Schoolwork — a desktop study planner for Senior Secondary students. Electron-packaged app with local accounts, per-term profiles, and Google Calendar sync.",
+  "main": "main.js",
+  "author": "Isaak Simpson",
+  "license": "UNLICENSED",
+  "private": true,
+  "scripts": {
+    "start": "electron .",
+    "build": "electron-builder",
+    "build:win": "electron-builder --win --x64",
+    "build:portable": "electron-builder --win portable --x64"
+  },
+  "dependencies": {
+    "googleapis": "^144.0.0"
+  },
+  "devDependencies": {
+    "electron": "^31.3.1",
+    "electron-builder": "^24.13.3"
+  },
+  "build": {
+    "appId": "au.com.cudesign.schoolwork",
+    "productName": "Schoolwork",
+    "files": [
+      "main.js",
+      "preload.js",
+      "google-calendar.js",
+      "google-drive.js",
+      "PRIVACY.md",
+      "TERMS.md",
+      "app/**/*",
+      "!app/screenshots",
+      "!app/scraps"
+    ],
+    "directories": {
+      "output": "dist"
+    },
+    "win": {
+      "target": [
+        { "target": "nsis", "arch": ["x64"] },
+        { "target": "portable", "arch": ["x64"] }
+      ],
+      "artifactName": "${productName}-${version}-${arch}.${ext}"
+    },
+    "nsis": {
+      "oneClick": false,
+      "perMachine": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "shortcutName": "Schoolwork"
+    }
+  }
+}

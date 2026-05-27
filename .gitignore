@@ -1,0 +1,43 @@
+# ─── Dependencies ──────────────────────────────────────────────
+node_modules/
+
+# ─── Build / packaging output ──────────────────────────────────
+dist/
+out/
+*.exe
+*.app
+*.dmg
+*.blockmap
+
+# ─── Secrets & local credentials ───────────────────────────────
+# These live in %APPDATA%\Schoolwork at runtime and must never be
+# committed, but ignore them here too in case they get copied in.
+.env
+.env.*
+google-client.json
+google-token.enc
+schoolwork-state.json
+*.enc
+
+# ─── Scratch / non-shipped assets (excluded from the build too) ─
+app/screenshots/
+app/scraps/
+_design_files/
+
+# ─── Local tooling ─────────────────────────────────────────────
+.claude/
+.vscode/
+.idea/
+*.swp
+
+# ─── Logs ──────────────────────────────────────────────────────
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# ─── OS junk ───────────────────────────────────────────────────
+.DS_Store
+Thumbs.db
+ehthumbs.db
+Desktop.ini
