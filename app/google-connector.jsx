@@ -193,10 +193,19 @@ const GoogleConnector = (() => {
         const chosen = selectedAssignments();
         if (chosen.length === 0) { pushToast?.({ tone: 'warning', title: 'Nothing to push', body: 'No assignments match that selection.' }); return; }
         const remMin = reminder === -1 ? null : reminder;
-        const events = chosen.map(a => assignmentToEvent(a, courses.find(c => c.id === a.course), remMin));
+        // For every assignment push the final-due event; if it also has a
+        // draftDue milestone, push that as a SEPARATE event (own schoolworkId,
+        // suffixed ":draft") so both deadlines land in Google Calendar.
+        const events = [];
+        let drafts = 0;
+        for (const a of chosen) {
+          const course = courses.find(c => c.id === a.course);
+          events.push(assignmentToEvent(a, course, remMin));
+          if (a.draftDue) { events.push(draftToEvent(a, course, remMin)); drafts++; }
+        }
         const res = await api.google.pushEvents(calendarId, events);
         setLastResult({ kind: 'assignments', res });
-        pushToast?.({ tone: 'success', title: 'Calendar updated', body: `${res.length} assignment${res.length === 1 ? '' : 's'} pushed.` });
+        pushToast?.({ tone: 'success', title: 'Calendar updated', body: `${chosen.length} assignment${chosen.length === 1 ? '' : 's'} pushed` + (drafts ? ` · ${drafts} draft milestone${drafts === 1 ? '' : 's'} included` : '') + '.' });
       } catch (e) {
         pushToast?.({ tone: 'warning', title: 'Sync failed', body: e.message });
       } finally { setBusy(false); }
@@ -598,7 +607,7 @@ const GoogleConnector = (() => {
       assignments.filter(a => a.status !== 'graded' && a.status !== 'submitted').forEach(a => {
         const course = courses.find(c => c.id === a.course);
         out.push({ id: 'a:' + a.id, label: a.title, sub: (courseById(a.course)?.code || '') + ' · due ' + new Date(a.due).toLocaleDateString(), build: (rem) => assignmentToEvent(a, course, rem) });
-        if (seed.isEssay(a.type) && a.draftDue) {
+        if (a.draftDue) {
           out.push({ id: 'd:' + a.id, label: 'Draft — ' + a.title, sub: 'draft due ' + new Date(a.draftDue).toLocaleDateString(), build: (rem) => draftToEvent(a, course, rem) });
         }
       });

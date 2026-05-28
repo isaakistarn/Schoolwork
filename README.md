@@ -109,6 +109,11 @@ Cloud OAuth client so your data never proxies through a third-party server.
   - End: due time
   - Description: course, type, weight, priority, notes
   - 24-hour reminder
+- **Push draft milestones** — when an assignment has a `draftDue` value (any
+  type, not just essays), a second event is pushed alongside the final-due
+  event. Title: `DRAFT — <COURSE_CODE> — <assignment title>`; ends at the
+  draft due time. Stored under `schoolworkId = <assignment-id>:draft` so it
+  upserts independently from the final-due event.
 - **Push this week's classes** — every entry in the weekly schedule, anchored
   to the current Monday.
 
