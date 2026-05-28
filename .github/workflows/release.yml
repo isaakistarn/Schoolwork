@@ -39,6 +39,23 @@ jobs:
 
       - run: npm ci
 
+      # supabase-config.json is gitignored (it holds the project URL + the
+      # publishable key). Reconstitute it from repo secrets so the bundled
+      # asar includes it — preload reads this file at startup to wire up
+      # window.schoolworkAPI.supabaseConfig. Without this step the shipped
+      # build shows "Cloud auth isn't configured" on launch.
+      - name: Write Supabase config from secrets
+        shell: bash
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
+        run: |
+          if [ -z "$SUPABASE_URL" ] || [ -z "$SUPABASE_KEY" ]; then
+            echo "::error::SUPABASE_URL or SUPABASE_KEY secret is missing"
+            exit 1
+          fi
+          node -e "require('fs').writeFileSync('supabase-config.json', JSON.stringify({ url: process.env.SUPABASE_URL, key: process.env.SUPABASE_KEY }, null, 2) + '\n')"
+
       - name: Build ${{ matrix.label }}
         run: npm run ${{ matrix.script }}
         env:
