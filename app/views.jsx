@@ -301,15 +301,8 @@ const AddSubjectModal = ({ onAdd, onClose }) => {
 
 const CoursesView = ({ onNavigate, pushToast }) => {
   const { useStore, Editable } = window.Store;
-  const { courses: COURSES, assignments: ASSIGNMENTS, updateCourse, addCourse, removeCourse, workspaceName } = useStore();
-  const { fmt, Progress } = window.UI;
+  const { courses: COURSES, updateCourse, addCourse, removeCourse, workspaceName } = useStore();
 
-  const { classGrade } = window.SchoolworkData;
-  const stats = (cid) => {
-    const list = ASSIGNMENTS.filter(a => a.course === cid);
-    const open = list.filter(a => a.status !== "graded" && a.status !== "submitted").length;
-    return { total: list.length, open, grade: classGrade(list) };
-  };
   const [addOpen, setAddOpen] = useState(false);
   const handleAdd = (row) => {
     const created = addCourse(row);
@@ -339,38 +332,21 @@ const CoursesView = ({ onNavigate, pushToast }) => {
           </div>
         )}
         <div className="course-grid">
-          {COURSES.map(c => {
-            const s = stats(c.id);
-            return (
-              <div className="course-card" key={c.id} onClick={() => onNavigate("course:" + c.id)}>
-                <div className="cc-top">
-                  <div style={{ minWidth: 0, flex: 1 }}>
-                    <div className="cc-code"><span className="dot" style={{ background: c.color, marginRight: 6 }} /><Editable value={c.code} onChange={(v) => updateCourse(c.id, { code: v })} /></div>
-                    <div className="cc-title"><Editable value={c.title} onChange={(v) => updateCourse(c.id, { title: v })} /></div>
-                    <div className="cc-instr"><Editable value={c.instructor} onChange={(v) => updateCourse(c.id, { instructor: v })} /></div>
-                  </div>
-                  <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-end", gap: 4 }}>
-                    <div className="grade-pill" title="Class grade from IA1–IA3 & EA results">{s.grade != null ? s.grade.toFixed(1) : "—"}</div>
-                    <button className="iconbtn" style={{ width: 22, height: 22 }} aria-label="Remove subject" title="Remove subject"
-                      onClick={(e) => { e.stopPropagation(); if (confirm("Remove " + c.code + " from this term?")) { removeCourse(c.id); pushToast?.({ tone: "warning", title: "Subject removed" }); } }}>
-                      <Icon name="trash" size={12} />
-                    </button>
-                  </div>
+          {COURSES.map(c => (
+            <div className="course-card" key={c.id} role="button" tabIndex={0} onClick={() => onNavigate("course:" + c.id)}
+              onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); onNavigate("course:" + c.id); } }}>
+              <div className="cc-top">
+                <div style={{ minWidth: 0, flex: 1 }}>
+                  <div className="cc-code"><span className="dot" style={{ background: c.color, marginRight: 6 }} /><Editable value={c.code} onChange={(v) => updateCourse(c.id, { code: v })} /></div>
+                  <div className="cc-title"><Editable value={c.title} onChange={(v) => updateCourse(c.id, { title: v })} /></div>
                 </div>
-                <div style={{ fontSize: 12, color: "var(--fg-tertiary)", marginTop: 4 }}>
-                  <div>{c.schedule}</div>
-                  <div>{c.room} · {c.credits} credits</div>
-                </div>
-                <div style={{ marginTop: 4 }}>
-                  <Progress value={c.completion * 100} />
-                </div>
-                <div className="cc-meta">
-                  <span>{s.open} open · {s.total} total</span>
-                  <span>{Math.round(c.completion * 100)}% complete</span>
-                </div>
+                <button className="iconbtn" style={{ width: 22, height: 22 }} aria-label="Remove subject" title="Remove subject"
+                  onClick={(e) => { e.stopPropagation(); if (confirm("Remove " + c.code + " from this term?")) { removeCourse(c.id); pushToast?.({ tone: "warning", title: "Subject removed" }); } }}>
+                  <Icon name="trash" size={12} />
+                </button>
               </div>
-            );
-          })}
+            </div>
+          ))}
         </div>
       </div>
     </>
