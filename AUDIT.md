@@ -12,9 +12,10 @@ Legend: ✅ done in this pass · ⚠️ needs a one-time action from you · 🔭
 - ✅ **Login / sign-up screen** with an entrance animation (splash → reveal).
 - ✅ **Local accounts** — sign up with name/email/password; sessions persist so
   the app reopens already signed in.
-- ✅ **Unlimited accounts** hard-wired for `isaak.simpson@gmail.com` and
-  `6simpsis@nudgee.qld.edu.au` — they bypass every cap automatically. Just sign
-  up/sign in with either address.
+- ✅ **Unlimited accounts** hard-wired via salted hashes in `auth.jsx`
+  (`UNLIMITED_EMAIL_HASHES`) — those addresses bypass every cap automatically.
+  Add another by hashing `"UNLIMITED:" + normalised-email` with the existing
+  djb2-XOR `hash()` and appending the hex.
 - ✅ **Rate limiting** on free accounts (per term): 20 assignments, 15 notes,
   8 subjects, 3 calendars, 40 events, 12 library files. Hitting a cap shows a
   clear "limit reached" dialog instead of silently failing.

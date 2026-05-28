@@ -14,8 +14,14 @@
 const Auth = (() => {
   const { createContext, useContext, useState, useEffect, useCallback, useRef } = React;
 
-  /* ---- accounts with unlimited access ---- */
-  const UNLIMITED_EMAILS = ["isaak.simpson@gmail.com", "6simpsis@nudgee.qld.edu.au"];
+  /* ---- accounts with unlimited access ----
+     Soft-obfuscated so the email addresses don't appear in plain text in
+     this (public) source. Compare djb2-XOR hashes of "UNLIMITED:<email>"
+     instead of the raw addresses. To add a new unlimited account, hash the
+     normalised (trim+lowercase) email with the same salt and add the hex.
+  */
+  const UNLIMITED_HASH_SALT = "UNLIMITED:";
+  const UNLIMITED_EMAIL_HASHES = ["30f21f9b", "2428ff67"];
 
   /* ---- free-tier caps (per term profile) ---- */
   const FREE_LIMITS = {
@@ -61,7 +67,7 @@ const Auth = (() => {
   function makeSalt() { return Math.random().toString(36).slice(2, 10); }
 
   const normalizeEmail = (e) => (e || "").trim().toLowerCase();
-  const tierFor = (email) => UNLIMITED_EMAILS.includes(normalizeEmail(email)) ? "unlimited" : "free";
+  const tierFor = (email) => UNLIMITED_EMAIL_HASHES.includes(hash(UNLIMITED_HASH_SALT + normalizeEmail(email))) ? "unlimited" : "free";
   const limitsFor = (tier) => (tier === "unlimited" ? UNLIMITED_LIMITS : FREE_LIMITS);
 
   const AuthCtx = createContext(null);
@@ -182,7 +188,7 @@ const Auth = (() => {
       if (!res.ok) setError(res.error);
     };
 
-    const isUnlimitedPreview = ["isaak.simpson@gmail.com", "6simpsis@nudgee.qld.edu.au"].includes(email.trim().toLowerCase());
+    const isUnlimitedPreview = tierFor(email) === "unlimited";
 
     return (
       <div className="auth-screen">
@@ -262,7 +268,7 @@ const Auth = (() => {
     );
   };
 
-  return { AuthProvider, useAuth, Splash, LoginScreen, UNLIMITED_EMAILS, FREE_LIMITS };
+  return { AuthProvider, useAuth, Splash, LoginScreen, FREE_LIMITS };
 })();
 
 window.Auth = Auth;
