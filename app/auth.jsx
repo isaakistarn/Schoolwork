@@ -14,21 +14,14 @@
 const Auth = (() => {
   const { createContext, useContext, useState, useEffect, useCallback, useRef } = React;
 
-  /* ---- free-tier caps (per term profile) ---- */
-  const FREE_LIMITS = {
-    assignments: 20,
-    notes: 15,
-    courses: 8,
-    calendars: 3,
-    events: 40,
-    library: 12,
-    googleSyncsPerDay: 5,
-  };
+  /* All accounts have unlimited capacity. The free-plan tier was retired —
+     limits stay in the shape callers expect, just with Infinity everywhere. */
   const UNLIMITED_LIMITS = {
     assignments: Infinity, notes: Infinity, courses: Infinity,
     calendars: Infinity, events: Infinity, library: Infinity,
     googleSyncsPerDay: Infinity,
   };
+  const FREE_LIMITS = UNLIMITED_LIMITS;
 
   /* ---- account-level notification preferences ---- */
   const DEFAULT_PREFS = {
@@ -50,7 +43,6 @@ const Auth = (() => {
   const writeJSON = (k, v) => { try { localStorage.setItem(k, JSON.stringify(v)); } catch {} };
 
   const normalizeEmail = (e) => (e || "").trim().toLowerCase();
-  const limitsFor = (tier) => (tier === "unlimited" ? UNLIMITED_LIMITS : FREE_LIMITS);
 
   /* ---- Supabase client (singleton) ---- */
   const supabaseConfig = (typeof window !== "undefined" && window.schoolworkAPI && window.schoolworkAPI.supabaseConfig) || null;
@@ -62,18 +54,6 @@ const Auth = (() => {
       });
     } catch { return null; }
   })();
-
-  async function fetchTier(userId) {
-    if (!supabaseClient) return "free";
-    try {
-      const { data } = await supabaseClient
-        .from("profiles")
-        .select("tier")
-        .eq("id", userId)
-        .maybeSingle();
-      return (data && data.tier === "unlimited") ? "unlimited" : "free";
-    } catch { return "free"; }
-  }
 
   const AuthCtx = createContext(null);
 
@@ -99,10 +79,7 @@ const Auth = (() => {
         if (!sbSession) {
           if (session) setSession(null);
         } else {
-          const user = sbSession.user;
-          const tier = await fetchTier(user.id);
-          if (cancelled) return;
-          linkOrCreateLocalAccount(user, tier);
+          linkOrCreateLocalAccount(sbSession.user);
         }
         setBootstrapped(true);
       })();
@@ -115,7 +92,7 @@ const Auth = (() => {
        supabaseUserId first, then by email — that's how isaak.simpson's
        pre-existing local data gets linked on his first cloud login).
        Falls through to creating a fresh local account record. */
-    function linkOrCreateLocalAccount(user, tier, signupExtras) {
+    function linkOrCreateLocalAccount(user, signupExtras) {
       const email = normalizeEmail(user.email);
       setAccounts(list => {
         let next = list;
@@ -123,7 +100,7 @@ const Auth = (() => {
                  || list.find(a => normalizeEmail(a.email) === email);
         if (match) {
           next = list.map(a => a.id === match.id
-            ? { ...a, email, supabaseUserId: user.id, tier, ...(signupExtras || {}) }
+            ? { ...a, email, supabaseUserId: user.id, ...(signupExtras || {}) }
             : a);
         } else {
           match = {
@@ -132,7 +109,6 @@ const Auth = (() => {
             email,
             school: (signupExtras && signupExtras.school) || "generic",
             supabaseUserId: user.id,
-            tier,
             createdAt: new Date().toISOString(),
           };
           next = [...list, match];
@@ -159,8 +135,7 @@ const Auth = (() => {
       }
       if (!data.user) return { ok: false, error: "Check your email to confirm your account, then sign in." };
 
-      const tier = await fetchTier(data.user.id);
-      linkOrCreateLocalAccount(data.user, tier, { name: (name || "").trim() || undefined, school });
+      linkOrCreateLocalAccount(data.user, { name: (name || "").trim() || undefined, school });
       return { ok: true };
     }, []);
 
@@ -177,8 +152,7 @@ const Auth = (() => {
         }
         return { ok: false, error: /invalid login/i.test(error.message) ? "Incorrect email or password." : error.message };
       }
-      const tier = await fetchTier(data.user.id);
-      linkOrCreateLocalAccount(data.user, tier);
+      linkOrCreateLocalAccount(data.user);
       return { ok: true };
     }, [accounts]);
 
@@ -194,13 +168,12 @@ const Auth = (() => {
       setAccounts(list => list.map(a => a.id === account.id ? { ...a, ...patch } : a));
     }, [account]);
 
-    const tier = account?.tier || "free";
     const prefs = { ...DEFAULT_PREFS, ...(account?.prefs || {}) };
     const setPrefs = (patch) => updateAccount({ prefs: { ...prefs, ...patch } });
     const value = {
       account, accounts, signup, login, logout, updateAccount,
-      tier, isUnlimited: tier === "unlimited",
-      limits: limitsFor(tier),
+      tier: "unlimited", isUnlimited: true,
+      limits: UNLIMITED_LIMITS,
       FREE_LIMITS,
       prefs, setPrefs, DEFAULT_PREFS,
       bootstrapped,

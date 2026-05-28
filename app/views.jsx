@@ -1734,8 +1734,8 @@ const SettingsView = ({ tweaks, setTweak, pushToast, onLogout }) => {
                     <SettingsField label="Email" hint="The address you signed in with.">
                       <input className="input" value={account?.email || ""} readOnly />
                     </SettingsField>
-                    <SettingsField label="Plan" hint={isUnlimited ? "Unlimited access — no caps on this account." : "Free plan — per-term caps apply. See Data & storage."}>
-                      <span className={"badge " + (isUnlimited ? "accent" : "neutral")} style={{ fontSize: 13 }}>{isUnlimited ? "Unlimited" : "Free plan"}</span>
+                    <SettingsField label="Plan" hint="Unlimited access — no caps on this account.">
+                      <span className="badge accent" style={{ fontSize: 13 }}>Unlimited</span>
                     </SettingsField>
                   </div>
                 </div>
@@ -1922,7 +1922,7 @@ const SettingsView = ({ tweaks, setTweak, pushToast, onLogout }) => {
 
           {tab === "storage" && (
             <>
-              <SettingsSection title="Usage this term" subtitle={isUnlimited ? "Your account has unlimited capacity." : "Free plan caps apply per term profile (" + workspaceName + ")."}>
+              <SettingsSection title="Usage this term" subtitle="Your account has unlimited capacity.">
                 <div className="settings-stats">
                   {[["Assignments", usage.assignments, limits.assignments], ["Notes", usage.notes, limits.notes], ["Subjects", usage.courses, limits.courses], ["Library files", usage.library, limits.library]].map(([label, used, cap]) => (
                     <div className="stat" key={label}>
@@ -1959,7 +1959,7 @@ const SettingsView = ({ tweaks, setTweak, pushToast, onLogout }) => {
                   <dt>Version</dt><dd>{(typeof window !== "undefined" && window.schoolworkAPI && window.schoolworkAPI.appVersion) || "—"}</dd>
                   <dt>Storage</dt><dd>Local (this device)</dd>
                   <dt>Signed in as</dt><dd>{account?.email}</dd>
-                  <dt>Plan</dt><dd>{isUnlimited ? "Unlimited" : "Free"}</dd>
+                  <dt>Plan</dt><dd>Unlimited</dd>
                 </dl>
               </SettingsSection>
               <SettingsSection title="Legal" subtitle="Please read these before relying on the app.">

@@ -199,7 +199,7 @@ const AppBar = ({ sidebarCollapsed, onToggleSidebar, theme, onToggleTheme, onCom
                 <span className="avatar lg" aria-hidden="true">{initials || "U"}</span>
                 <div style={{ minWidth: 0 }}>
                   <div className="um-name">{userName}</div>
-                  <div className="um-tier"><span className={"badge " + (tier === "unlimited" ? "accent" : "neutral")}>{tier === "unlimited" ? "Unlimited" : "Free plan"}</span></div>
+                  <div className="um-tier"><span className="badge accent">Unlimited</span></div>
                 </div>
               </div>
               <button className="workspace-menu-item" role="menuitem" onClick={() => { onOpenSettings(); setUserOpen(false); }}>
