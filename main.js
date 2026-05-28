@@ -26,6 +26,7 @@ function createWindow() {
     backgroundColor: '#1B1E22',
     show: false,
     title: 'Schoolwork',
+    icon: path.join(__dirname, 'logo.ico'),
     autoHideMenuBar: true,
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),

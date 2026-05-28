@@ -4,7 +4,8 @@ A desktop study planner for Senior Secondary students. Implements the
 `Schoolwork Dashboard` design handed off from Claude Design and wraps it in
 Electron so it can ship as a Windows `.exe`. Includes a Google Calendar
 connector that pushes assignments and your weekly timetable to a synced
-calendar.
+calendar, and **cross-device sync** that keeps multiple computers in step
+through a cloud-synced folder (OneDrive / Dropbox / Google Drive Desktop).
 
 ```
 Schoolwork/
@@ -13,11 +14,14 @@ Schoolwork/
 ├── preload.js                contextBridge → window.schoolworkAPI
 ├── google-calendar.js        OAuth + Calendar API (main-process module)
 ├── google-drive.js           OAuth + Drive API (main-process module)
-├── logo.svg                  app logo
+├── logo.svg / logo.ico       app logo (SVG source + generated Windows icon)
+├── tools/make-icon.js        regenerates logo.ico from logo.svg
 ├── app/
 │   ├── index.html            entry point — loads vendored React + Babel
 │   ├── vendor/               vendored React 18.3.1, ReactDOM, Babel 7.29.0
-│   ├── *.jsx / styles.css    the design implementation
+│   ├── store.jsx             account/term-scoped state, persisted to localStorage
+│   ├── sync.jsx              cross-device sync via a cloud-synced folder
+│   ├── *.jsx / styles.css    the rest of the design implementation
 │   └── google-connector.jsx  renderer-side connector UI
 └── README.md                 this file
 ```
@@ -45,15 +49,24 @@ Output lands in `dist/`:
 
 ```
 dist/
-├── Schoolwork-0.1.0-x64.exe              ← portable
-└── Schoolwork Setup 0.1.0.exe            ← NSIS installer
+├── Schoolwork-Setup-0.2.0-x64.exe        ← NSIS installer
+└── Schoolwork-Portable-0.2.0-x64.exe     ← portable single-file
 ```
 
 `electron-builder` reads the `build` block in `package.json`. The build
 targets x64, the installer is non-silent (the user picks the install
-directory), and creates Start Menu + Desktop shortcuts. To sign the
-executable, add `win.certificateFile` + `CSC_KEY_PASSWORD` or use Azure
-Trusted Signing — neither is wired up yet.
+directory), and creates Start Menu + Desktop shortcuts. The app icon is
+`logo.ico` (`build.win.icon`); regenerate it from `logo.svg` with
+`node tools/make-icon.js` (after `npm install --no-save sharp png-to-ico`).
+
+To sign the executable, add `win.certificateFile` + `CSC_KEY_PASSWORD` or use
+Azure Trusted Signing — neither is wired up yet.
+
+> **First-build gotcha (Windows):** electron-builder's `winCodeSign` helper is
+> a `.7z` containing macOS symlinks, and extracting it fails with *"A required
+> privilege is not held by the client"* unless you **enable Developer Mode**
+> (Settings → Privacy & security → For developers) or run the build from an
+> **elevated** terminal.
 
 ## 3. Connect a Google Calendar
 
@@ -80,8 +93,8 @@ Cloud OAuth client so your data never proxies through a third-party server.
   - End: due time
   - Description: course, type, weight, priority, notes
   - 24-hour reminder
-- **Push this week's classes** — every entry in the seed `SCHEDULE` array,
-  anchored to the current Monday.
+- **Push this week's classes** — every entry in the weekly schedule, anchored
+  to the current Monday.
 
 ### How re-syncing avoids duplicates
 
@@ -91,98 +104,83 @@ property and patches the existing event instead of creating a new one — so
 you can mash the button repeatedly without filling your calendar with
 duplicates.
 
-### Where credentials live
+## 4. Sync between devices (cloud-synced folder)
 
-| Artifact          | Location                                         | Encryption |
-| ----------------- | ------------------------------------------------ | ---------- |
-| OAuth client id/secret | `%APPDATA%\Schoolwork\google-client.json` | plain JSON |
-| Refresh / access tokens | `%APPDATA%\Schoolwork\google-token.enc` | `safeStorage` (DPAPI on Windows, Keychain on macOS) |
-| App state mirror | `%APPDATA%\Schoolwork\schoolwork-state.json` | plain JSON |
+Schoolwork keeps multiple computers (e.g. a laptop and a desktop) in step by
+mirroring its data through a folder you already sync with **OneDrive, Dropbox,
+or Google Drive Desktop**. That synced folder is the only requirement — no
+account, server, or API keys.
+
+**How it works** — the whole `schoolwork:` localStorage namespace (subjects,
+assignments, notes, schedule, calendars, events, library, your account, terms,
+and appearance) is mirrored to a single `schoolwork-sync.json` file in the
+chosen folder. The model is *last full snapshot wins*:
+
+- **On launch** — pulls the newest snapshot before the UI loads.
+- **On change** — a debounced write-back, plus an immediate flush when the
+  window is hidden/closed (so closing the laptop saves).
+- **On focus / "Sync now"** — if the other device saved something newer, it
+  prompts before reloading, so an in-progress edit isn't lost.
+- **Turning sync on** — if the folder already holds a snapshot, it asks whether
+  to *load* it onto this device or *overwrite* it with this device's data.
+
+**Enable it** — Settings → **Sync devices**: point it at the cloud folder
+(defaults to `…\OneDrive\Schoolwork`) and toggle it on. Repeat on every
+computer, pointing each one at the *same* synced folder.
+
+**Where the settings live** — the folder path + on/off are stored per-machine
+in `%APPDATA%\<app>\sync-config.json` and are deliberately *not* synced, so
+each device keeps its own path. Your Google sign-in is also **not** synced (the
+tokens are encrypted per-machine files) — connect Google separately on each
+device.
+
+**Caveat** — last-write-wins: if the app is open on two machines and you edit
+both at once, whichever saves last wins. Keep it closed on the machine you're
+not using.
+
+> Implementation: `app/sync.jsx` (the `SyncBridge` + the Settings panel) plus
+> the `sync:*` IPC handlers in `main.js` / `preload.js`. New machine going from
+> a pre-sync build to this one? See **DESKTOP-MIGRATION.md**.
+
+### Going further (not implemented)
+
+For real-time, multi-user, or conflict-free collaborative editing you'd move to
+a backend — **Firebase Firestore** (fastest path), **Supabase** (Postgres, own
+your data), or a **CRDT layer** (Yjs / Automerge). These are bigger lifts and
+overkill for a single student syncing two personal machines; the cloud-folder
+approach above covers that case with no infrastructure.
+
+## 5. Where things are stored
+
+`<app>` below is `schoolwork-dashboard` in development (`npm start`) and
+`Schoolwork` in the packaged/installed build — so the two run modes keep
+**separate** local data.
+
+| Artifact | Location | Encryption |
+| -------- | -------- | ---------- |
+| OAuth client id/secret | `%APPDATA%\<app>\google-client-<account>.json` | plain JSON |
+| Refresh / access tokens | `%APPDATA%\<app>\google-token-<account>.enc` | `safeStorage` (DPAPI on Windows, Keychain on macOS) |
+| App data (subjects, assignments, notes, …) | Electron `localStorage` in the user-data dir, keys `schoolwork:*` | per-OS |
+| Sync folder + on/off | `%APPDATA%\<app>\sync-config.json` | plain JSON |
+| Cloud sync snapshot | `<your cloud folder>\schoolwork-sync.json` | plain JSON |
 
 `safeStorage.isEncryptionAvailable()` is checked at runtime; if it returns
-false (e.g. on a freshly installed Linux box with no keyring) the token
-file falls back to plain JSON — Electron will log a warning in dev mode.
+false (e.g. on a freshly installed Linux box with no keyring) the token file
+falls back to plain JSON — Electron will log a warning in dev mode.
 
-## 4. Cloud sync between devices — recommended architecture
-
-The desktop app today is single-device: state lives in React `useState` plus
-a JSON mirror in `%APPDATA%`. To sync across devices, here is the path I'd
-take, ordered cheapest → most flexible.
-
-### Option A — Firebase (fastest path to multi-device)
-
-- **Auth**: Firebase Auth with Google provider (reuses the OAuth client you
-  already set up for Calendar).
-- **Data**: Cloud Firestore. Model: one document per assignment, note,
-  course. Top-level path `users/{uid}/assignments/{id}` etc.
-- **Live sync**: Firestore's snapshot listeners drop changes into the
-  renderer in real time (~250 ms median). No backend code to write.
-- **Conflict resolution**: last-writer-wins by default, which is fine for a
-  single-user multi-device study app. If two devices edit the same field at
-  the same second you lose one edit — acceptable for this workload.
-- **Offline**: Firestore caches locally and replays writes on reconnect.
-- **Cost**: free tier comfortably covers a single student.
-
-```js
-// renderer pseudo-code
-import { onSnapshot, collection, doc, setDoc } from 'firebase/firestore';
-onSnapshot(collection(db, `users/${uid}/assignments`), snap => {
-  store.replaceAssignments(snap.docs.map(d => d.data()));
-});
-// on edit:
-setDoc(doc(db, `users/${uid}/assignments/${id}`), patch, { merge: true });
-```
-
-### Option B — Supabase (open-source, Postgres-backed)
-
-Same architectural shape as Firebase: row-level-security gives you
-per-user isolation, Realtime channels deliver live updates. Choose this if
-you want to own your data and can run a Postgres database. Costs a little
-engineering ($5/mo + your time) vs. Firebase's $0 free tier.
-
-### Option C — CRDT layer (Yjs / Automerge) over any transport
-
-For true multi-device editing with offline-first conflict-free merges,
-model state as a CRDT and ship updates over any backend (WebSocket relay,
-y-websocket, Liveblocks, etc.). Highest ceiling for collaborative editing;
-overkill for a personal study planner.
-
-### Option D — Cloud-storage file (Dropbox / Google Drive / iCloud Drive)
-
-Store the entire app state JSON in the user's cloud-drive folder. Watch
-the file for changes (`fs.watch`) on the renderer side and re-hydrate the
-store. Trivial to ship, but conflict resolution is "newest file wins" —
-you'll lose edits if both devices write at once.
-
-### Recommendation for this app
-
-Start with **Firebase Firestore**. Wire it under the existing store
-(`app/store.jsx`):
-
-1. Add a `useFirestoreSync(uid)` hook that subscribes to the user's
-   collections and dispatches updates to React state.
-2. Mirror every `update*` action through a `setDoc(...{ merge: true })`.
-3. Reuse the Google OAuth token Schoolwork already obtained for Calendar to
-   authenticate Firebase Auth (`signInWithCredential`).
-4. Keep the `%APPDATA%\schoolwork-state.json` mirror as an offline cache —
-   Firestore's built-in cache covers most cases, but the JSON file is your
-   escape hatch if the user is offline for days.
-
-This keeps the existing UI untouched: the components stay backed by the
-in-memory store, the store quietly mirrors to Firestore in the background,
-and the connector you already have for Google Calendar becomes the auth
-entry-point for sync too.
-
-## 5. What's intentionally not done
+## 6. What's intentionally not done
 
 - **Code signing.** `electron-builder` will produce an unsigned `.exe`.
   Windows SmartScreen will warn first-run users until you sign with an EV
   or OV certificate, or migrate to Azure Trusted Signing.
 - **Auto-update.** Wire `electron-updater` to a GitHub Releases feed when
-  you're ready to ship updates without rebuilding installers.
+  you're ready to ship updates without rebuilding installers. (Cross-device
+  *data* sync is implemented — §4 — but app-binary updates are still manual.)
 - **Production React/Babel bundle.** Babel transpiles JSX at runtime which
   costs ~300 ms on launch. For shipping at scale, run a one-shot Vite or
   esbuild step in CI that outputs pre-compiled JS, and drop `babel.min.js`
   from `app/vendor/`.
-- **Multi-user backend.** Cloud sync is documented above but not
-  implemented in this drop.
+- **Real-time / multi-user backend.** Single-user device sync works via a
+  cloud-synced folder (§4); a live multi-user backend (Firestore / Supabase /
+  CRDT) is documented but not implemented.
+</content>
