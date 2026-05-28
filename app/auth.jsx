@@ -1,27 +1,18 @@
 /* global React, Icon */
 
 /* ============================================================
-   Auth — local account system, tiers, rate limits, login screen,
+   Auth — Supabase-backed account system, tiers, login screen,
    and the entrance/splash animation.
 
-   This is a LOCAL desktop app, so "accounts" live in localStorage.
-   Passwords are salted + hashed (djb2-xor) so they aren't stored in
-   plain text — this is obfuscation, not bank-grade security. When you
-   add the cloud backend (see README §4) swap LoginScreen's handlers to
-   call Firebase Auth / Supabase instead.
+   Credentials are validated against Supabase (bcrypt server-side,
+   UNIQUE email constraint on auth.users). The local accounts list
+   in localStorage is now just a per-device index that maps a
+   stable local id → Supabase user id, so all the existing
+   account-scoped data keys (schoolwork:data:<id>:…) keep working.
    ============================================================ */
 
 const Auth = (() => {
   const { createContext, useContext, useState, useEffect, useCallback, useRef } = React;
-
-  /* ---- accounts with unlimited access ----
-     Soft-obfuscated so the email addresses don't appear in plain text in
-     this (public) source. Compare djb2-XOR hashes of "UNLIMITED:<email>"
-     instead of the raw addresses. To add a new unlimited account, hash the
-     normalised (trim+lowercase) email with the same salt and add the hex.
-  */
-  const UNLIMITED_HASH_SALT = "UNLIMITED:";
-  const UNLIMITED_EMAIL_HASHES = ["30f21f9b", "2428ff67"];
 
   /* ---- free-tier caps (per term profile) ---- */
   const FREE_LIMITS = {
@@ -41,10 +32,10 @@ const Auth = (() => {
 
   /* ---- account-level notification preferences ---- */
   const DEFAULT_PREFS = {
-    inApp: true,          // show toasts + bell badge
+    inApp: true,
     calendarSync: false,
-    leadTimeHours: 24,    // "due soon" window for the notifications bell
-    digest: "morning",    // morning | evening | off — controls the in-app digest
+    leadTimeHours: 24,
+    digest: "morning",
   };
 
   const LS = {
@@ -58,64 +49,145 @@ const Auth = (() => {
   };
   const writeJSON = (k, v) => { try { localStorage.setItem(k, JSON.stringify(v)); } catch {} };
 
-  /* tiny salted hash — NOT cryptographically strong, just avoids plaintext */
-  function hash(str) {
-    let h = 5381;
-    for (let i = 0; i < str.length; i++) h = ((h << 5) + h) ^ str.charCodeAt(i);
-    return (h >>> 0).toString(16);
-  }
-  function makeSalt() { return Math.random().toString(36).slice(2, 10); }
-
   const normalizeEmail = (e) => (e || "").trim().toLowerCase();
-  const tierFor = (email) => UNLIMITED_EMAIL_HASHES.includes(hash(UNLIMITED_HASH_SALT + normalizeEmail(email))) ? "unlimited" : "free";
   const limitsFor = (tier) => (tier === "unlimited" ? UNLIMITED_LIMITS : FREE_LIMITS);
+
+  /* ---- Supabase client (singleton) ---- */
+  const supabaseConfig = (typeof window !== "undefined" && window.schoolworkAPI && window.schoolworkAPI.supabaseConfig) || null;
+  const supabaseClient = (() => {
+    if (!supabaseConfig || !window.supabase) return null;
+    try {
+      return window.supabase.createClient(supabaseConfig.url, supabaseConfig.key, {
+        auth: { persistSession: true, autoRefreshToken: true, storage: window.localStorage },
+      });
+    } catch { return null; }
+  })();
+
+  async function fetchTier(userId) {
+    if (!supabaseClient) return "free";
+    try {
+      const { data } = await supabaseClient
+        .from("profiles")
+        .select("tier")
+        .eq("id", userId)
+        .maybeSingle();
+      return (data && data.tier === "unlimited") ? "unlimited" : "free";
+    } catch { return "free"; }
+  }
 
   const AuthCtx = createContext(null);
 
   const AuthProvider = ({ children }) => {
     const [accounts, setAccounts] = useState(() => readJSON(LS.accounts, []));
     const [session, setSession]   = useState(() => readJSON(LS.session, null));
+    const [bootstrapped, setBootstrapped] = useState(false);
 
     useEffect(() => writeJSON(LS.accounts, accounts), [accounts]);
     useEffect(() => writeJSON(LS.session, session), [session]);
 
-    const account = session ? accounts.find(a => a.id === session.accountId) || null : null;
+    /* On first paint, reconcile the local session with Supabase. If Supabase
+       has no session, we drop any stale local session — there's no offline
+       sign-in path. If Supabase has one, we find or create the matching
+       local account record and point the session at it. */
+    useEffect(() => {
+      let cancelled = false;
+      (async () => {
+        if (!supabaseClient) { setBootstrapped(true); return; }
+        const { data } = await supabaseClient.auth.getSession();
+        const sbSession = data && data.session;
+        if (cancelled) return;
+        if (!sbSession) {
+          if (session) setSession(null);
+        } else {
+          const user = sbSession.user;
+          const tier = await fetchTier(user.id);
+          if (cancelled) return;
+          linkOrCreateLocalAccount(user, tier);
+        }
+        setBootstrapped(true);
+      })();
+      return () => { cancelled = true; };
+      // run once
+      // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, []);
 
-    const signup = useCallback(({ name, email, password, school }) => {
+    /* Given a Supabase user, find the matching local account (by
+       supabaseUserId first, then by email — that's how isaak.simpson's
+       pre-existing local data gets linked on his first cloud login).
+       Falls through to creating a fresh local account record. */
+    function linkOrCreateLocalAccount(user, tier, signupExtras) {
+      const email = normalizeEmail(user.email);
+      setAccounts(list => {
+        let next = list;
+        let match = list.find(a => a.supabaseUserId === user.id)
+                 || list.find(a => normalizeEmail(a.email) === email);
+        if (match) {
+          next = list.map(a => a.id === match.id
+            ? { ...a, email, supabaseUserId: user.id, tier, ...(signupExtras || {}) }
+            : a);
+        } else {
+          match = {
+            id: "U-" + Date.now().toString(36),
+            name: (signupExtras && signupExtras.name) || email.split("@")[0],
+            email,
+            school: (signupExtras && signupExtras.school) || "generic",
+            supabaseUserId: user.id,
+            tier,
+            createdAt: new Date().toISOString(),
+          };
+          next = [...list, match];
+        }
+        setSession({ accountId: match.id });
+        return next;
+      });
+    }
+
+    const signup = useCallback(async ({ name, email, password, school }) => {
+      if (!supabaseClient) return { ok: false, error: "Cloud auth isn't configured on this build." };
       const em = normalizeEmail(email);
       if (!em || !password) return { ok: false, error: "Email and password are required." };
       if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(em)) return { ok: false, error: "Enter a valid email address." };
-      if (password.length < 4) return { ok: false, error: "Password must be at least 4 characters." };
-      if (accounts.some(a => a.email === em)) return { ok: false, error: "An account with that email already exists." };
-      const salt = makeSalt();
-      const acc = {
-        id: "U-" + Date.now().toString(36),
-        name: (name || em.split("@")[0]).trim(),
-        email: em,
-        salt,
-        passHash: hash(salt + password),
-        tier: tierFor(em),
-        school: school || "generic",   // pre-fills term dates for the new account
-        createdAt: new Date().toISOString(),
-      };
-      setAccounts(list => [...list, acc]);
-      setSession({ accountId: acc.id });
-      return { ok: true, account: acc };
-    }, [accounts]);
+      if (password.length < 6) return { ok: false, error: "Password must be at least 6 characters." };
 
-    const login = useCallback(({ email, password }) => {
+      const { data, error } = await supabaseClient.auth.signUp({ email: em, password });
+      if (error) {
+        // Supabase returns a generic message on duplicate email; normalise it.
+        const msg = /already registered|already exists/i.test(error.message)
+          ? "An account with that email already exists. Sign in instead."
+          : error.message;
+        return { ok: false, error: msg };
+      }
+      if (!data.user) return { ok: false, error: "Check your email to confirm your account, then sign in." };
+
+      const tier = await fetchTier(data.user.id);
+      linkOrCreateLocalAccount(data.user, tier, { name: (name || "").trim() || undefined, school });
+      return { ok: true };
+    }, []);
+
+    const login = useCallback(async ({ email, password }) => {
+      if (!supabaseClient) return { ok: false, error: "Cloud auth isn't configured on this build." };
       const em = normalizeEmail(email);
-      const acc = accounts.find(a => a.email === em);
-      if (!acc) return { ok: false, error: "No account found for that email. Create one below." };
-      if (acc.passHash !== hash(acc.salt + password)) return { ok: false, error: "Incorrect password." };
-      // keep tier in sync in case the unlimited list changed
-      const tier = tierFor(em);
-      if (tier !== acc.tier) setAccounts(list => list.map(a => a.id === acc.id ? { ...a, tier } : a));
-      setSession({ accountId: acc.id });
-      return { ok: true, account: { ...acc, tier } };
+      const { data, error } = await supabaseClient.auth.signInWithPassword({ email: em, password });
+      if (error) {
+        // Common case after the cloud-auth upgrade: a local-only account for
+        // this email exists but the user hasn't signed up to Supabase yet.
+        const hasLocalLegacy = accounts.some(a => normalizeEmail(a.email) === em && !a.supabaseUserId);
+        if (hasLocalLegacy && /invalid login/i.test(error.message)) {
+          return { ok: false, error: "This account hasn't been moved to the cloud yet. Use “Create an account” below with the same email to link your existing data." };
+        }
+        return { ok: false, error: /invalid login/i.test(error.message) ? "Incorrect email or password." : error.message };
+      }
+      const tier = await fetchTier(data.user.id);
+      linkOrCreateLocalAccount(data.user, tier);
+      return { ok: true };
     }, [accounts]);
 
-    const logout = useCallback(() => setSession(null), []);
+    const logout = useCallback(async () => {
+      try { if (supabaseClient) await supabaseClient.auth.signOut(); } catch {}
+      setSession(null);
+    }, []);
+
+    const account = session ? accounts.find(a => a.id === session.accountId) || null : null;
 
     const updateAccount = useCallback((patch) => {
       if (!account) return;
@@ -131,6 +203,8 @@ const Auth = (() => {
       limits: limitsFor(tier),
       FREE_LIMITS,
       prefs, setPrefs, DEFAULT_PREFS,
+      bootstrapped,
+      cloudConfigured: !!supabaseClient,
     };
     return <AuthCtx.Provider value={value}>{children}</AuthCtx.Provider>;
   };
@@ -141,7 +215,7 @@ const Auth = (() => {
      Splash — entrance animation. Plays once, then reveals children.
      ============================================================ */
   const Splash = ({ children }) => {
-    const [phase, setPhase] = useState("intro"); // intro -> done
+    const [phase, setPhase] = useState("intro");
     useEffect(() => {
       const t = setTimeout(() => setPhase("done"), 2100);
       return () => clearTimeout(t);
@@ -170,25 +244,32 @@ const Auth = (() => {
      Login / signup screen
      ============================================================ */
   const LoginScreen = () => {
-    const { login, signup } = useAuth();
-    const [mode, setMode] = useState("login"); // login | signup
+    const { login, signup, cloudConfigured } = useAuth();
+    const [mode, setMode] = useState("login");
     const [name, setName] = useState("");
     const [email, setEmail] = useState("");
     const [password, setPassword] = useState("");
     const [error, setError] = useState("");
+    const [busy, setBusy] = useState(false);
     const [show, setShow] = useState(false);
     const [legal, setLegal] = useState(null);
     const [school, setSchool] = useState("generic");
     const SCHOOLS = (window.SchoolworkData && window.SchoolworkData.SCHOOLS) || [];
 
-    const submit = (e) => {
+    const submit = async (e) => {
       e.preventDefault();
+      if (busy) return;
       setError("");
-      const res = mode === "login" ? login({ email, password }) : signup({ name, email, password, school });
-      if (!res.ok) setError(res.error);
+      setBusy(true);
+      try {
+        const res = mode === "login"
+          ? await login({ email, password })
+          : await signup({ name, email, password, school });
+        if (!res.ok) setError(res.error);
+      } finally {
+        setBusy(false);
+      }
     };
-
-    const isUnlimitedPreview = tierFor(email) === "unlimited";
 
     return (
       <div className="auth-screen">
@@ -203,14 +284,14 @@ const Auth = (() => {
             <li><Icon name="check" size={14} /> Editable classes, notes, and a real file library</li>
             <li><Icon name="check" size={14} /> Push deadlines straight to Google Calendar</li>
           </ul>
-          <div className="auth-foot">Local-first · your data stays on this device</div>
+          <div className="auth-foot">Cloud-backed sign-in · your work stays on this device</div>
         </div>
 
         <div className="auth-main">
           <form className="auth-card" onSubmit={submit}>
             <h1>{mode === "login" ? "Welcome back" : "Create your account"}</h1>
             <p className="auth-card-sub">
-              {mode === "login" ? "Sign in to your study workspace." : "Set up a local profile to get started."}
+              {mode === "login" ? "Sign in to your study workspace." : "Set up a cloud account to get started."}
             </p>
 
             {mode === "signup" && (
@@ -240,13 +321,13 @@ const Auth = (() => {
               </div>
             </label>
 
-            {isUnlimitedPreview && (
-              <div className="auth-badge-row"><span className="badge accent">Unlimited access account</span></div>
+            {!cloudConfigured && (
+              <div className="auth-error" role="alert"><Icon name="circle-warn" size={14} /> Cloud auth isn't configured on this build. Contact the developer.</div>
             )}
             {error && <div className="auth-error" role="alert"><Icon name="circle-warn" size={14} /> {error}</div>}
 
-            <button className="btn btn-primary auth-submit" type="submit">
-              {mode === "login" ? "Sign in" : "Create account"}
+            <button className="btn btn-primary auth-submit" type="submit" disabled={busy || !cloudConfigured}>
+              {busy ? (mode === "login" ? "Signing in…" : "Creating account…") : (mode === "login" ? "Sign in" : "Create account")}
             </button>
 
             <div className="auth-switch">

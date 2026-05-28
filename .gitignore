@@ -17,6 +17,7 @@ out/
 google-client.json
 google-token.enc
 schoolwork-state.json
+supabase-config.json
 *.enc
 
 # ─── Scratch / non-shipped assets (excluded from the build too) ─

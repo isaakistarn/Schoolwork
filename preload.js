@@ -1,12 +1,27 @@
 const { contextBridge, ipcRenderer } = require('electron');
+const fs = require('node:fs');
+const path = require('node:path');
 
 const pkg = require('./package.json');
+
+// Supabase publishable URL + key live next to package.json (gitignored, but
+// bundled into the asar via the build.files list). Safe to ship to the
+// renderer — RLS on the DB gates actual data access.
+function readSupabaseConfig() {
+  try {
+    const raw = fs.readFileSync(path.join(__dirname, 'supabase-config.json'), 'utf8');
+    const cfg = JSON.parse(raw);
+    if (cfg && typeof cfg.url === 'string' && typeof cfg.key === 'string') return cfg;
+  } catch {}
+  return null;
+}
 
 contextBridge.exposeInMainWorld('schoolworkAPI', {
   // Detect that we're in Electron (renderer code falls back to web-only mode otherwise)
   isDesktop: true,
   platform: process.platform,
   appVersion: pkg.version,
+  supabaseConfig: readSupabaseConfig(),
 
   // Scope Google credentials to the signed-in account.
   setAccount: (id) => ipcRenderer.invoke('app:set-account', id),
