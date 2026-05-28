@@ -1,13 +1,15 @@
 /*
- * Generates logo.ico (multi-resolution Windows icon) from logo.svg.
+ * Generates platform icon assets from logo.svg:
+ *   - logo.ico         multi-resolution Windows icon (build.win.icon)
+ *   - build/icon.png   1024x1024 PNG that electron-builder converts to .icns
+ *                      during the macOS build (build.mac.icon) — so no
+ *                      iconutil dependency on the Mac
  *
- * Used at asset-prep time, not at app runtime, so its tooling is intentionally
- * NOT in package.json dependencies. To regenerate the icon:
+ * Asset-prep tooling, intentionally NOT in package.json dependencies. To
+ * regenerate the icons:
  *
  *     npm install --no-save sharp png-to-ico
  *     node tools/make-icon.js
- *
- * The committed artifact is logo.ico; electron-builder reads it via build.win.icon.
  */
 const fs = require('node:fs');
 const path = require('node:path');
@@ -16,20 +18,28 @@ const pngToIco = require('png-to-ico').default || require('png-to-ico');
 
 const ROOT = path.join(__dirname, '..');
 const SVG = path.join(ROOT, 'logo.svg');
-const OUT = path.join(ROOT, 'logo.ico');
+const ICO_OUT = path.join(ROOT, 'logo.ico');
+const MAC_PNG_OUT = path.join(ROOT, 'build', 'icon.png');
 
-// Windows icons embed several sizes; 256 is required for modern shells, the
-// smaller ones keep the taskbar/16px tray rendering crisp.
-const SIZES = [256, 128, 64, 48, 32, 24, 16];
+const ICO_SIZES = [256, 128, 64, 48, 32, 24, 16];
+const MAC_PNG_SIZE = 1024;
 
 (async () => {
   const svg = fs.readFileSync(SVG);
-  // Rasterize the vector freshly at each size (not by downscaling one bitmap)
-  // so every resolution stays sharp.
+
+  // Windows .ico — rasterize the vector freshly at each size so every
+  // resolution stays sharp (not by downscaling one bitmap).
   const pngs = await Promise.all(
-    SIZES.map((s) => sharp(svg, { density: 512 }).resize(s, s, { fit: 'contain' }).png().toBuffer())
+    ICO_SIZES.map((s) => sharp(svg, { density: 512 }).resize(s, s, { fit: 'contain' }).png().toBuffer())
   );
   const ico = await pngToIco(pngs);
-  fs.writeFileSync(OUT, ico);
-  console.log('Wrote ' + OUT + ' (' + ico.length + ' bytes, sizes: ' + SIZES.join(',') + ')');
+  fs.writeFileSync(ICO_OUT, ico);
+  console.log('Wrote ' + ICO_OUT + ' (' + ico.length + ' bytes, sizes: ' + ICO_SIZES.join(',') + ')');
+
+  // macOS source PNG — electron-builder turns a 512+ PNG into a proper .icns
+  // container at build time, so we don't need iconutil here.
+  fs.mkdirSync(path.dirname(MAC_PNG_OUT), { recursive: true });
+  const macPng = await sharp(svg, { density: 1024 }).resize(MAC_PNG_SIZE, MAC_PNG_SIZE, { fit: 'contain' }).png().toBuffer();
+  fs.writeFileSync(MAC_PNG_OUT, macPng);
+  console.log('Wrote ' + MAC_PNG_OUT + ' (' + macPng.length + ' bytes, ' + MAC_PNG_SIZE + 'x' + MAC_PNG_SIZE + ')');
 })().catch((e) => { console.error(e); process.exit(1); });

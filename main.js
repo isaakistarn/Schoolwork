@@ -17,6 +17,18 @@ const configPath = () => path.join(userDataPath(), 'google-client-' + activeAcco
 
 let mainWindow = null;
 
+// macOS needs a real application menu or the standard Cmd+Q / Cmd+W / Cmd+C /
+// Cmd+V / Cmd+X / Cmd+A shortcuts stop working. Windows/Linux keep the
+// menuless look (autoHideMenuBar handles the title bar).
+function buildAppMenu() {
+  if (process.platform !== 'darwin') return null;
+  return Menu.buildFromTemplate([
+    { role: 'appMenu' },
+    { role: 'editMenu' },
+    { role: 'windowMenu' },
+  ]);
+}
+
 function createWindow() {
   mainWindow = new BrowserWindow({
     width: 1440,
@@ -37,7 +49,7 @@ function createWindow() {
     },
   });
 
-  Menu.setApplicationMenu(null);
+  Menu.setApplicationMenu(buildAppMenu());
 
   mainWindow.loadFile(path.join(__dirname, 'app', 'index.html'));
   mainWindow.once('ready-to-show', () => mainWindow.show());
@@ -200,9 +212,27 @@ const SYNC_FILE = 'schoolwork-sync.json';
 const syncConfigPath = () => path.join(userDataPath(), 'sync-config.json');
 const syncFilePath = (dir) => path.join(dir, SYNC_FILE);
 
-// Best-guess default: the user's OneDrive root (Windows sets these env vars),
-// falling back to Documents so there's always somewhere sensible to suggest.
+// Best-guess default: on Windows the OneDrive env var; on macOS the first
+// recognised cloud-storage folder (OneDrive in CloudStorage, the legacy
+// ~/OneDrive, iCloud Drive, then Dropbox); falling back to Documents either
+// way. The user can override via the folder picker — this is only the starting
+// suggestion.
 function defaultSyncDir() {
+  if (process.platform === 'darwin') {
+    const home = os.homedir();
+    const candidates = [];
+    const cs = path.join(home, 'Library', 'CloudStorage');
+    try {
+      for (const name of fs.readdirSync(cs)) {
+        if (/^(OneDrive|GoogleDrive)/i.test(name)) candidates.push(path.join(cs, name));
+      }
+    } catch {}
+    candidates.push(path.join(home, 'OneDrive'));
+    candidates.push(path.join(home, 'Library', 'Mobile Documents', 'com~apple~CloudDocs')); // iCloud Drive
+    candidates.push(path.join(home, 'Dropbox'));
+    const base = candidates.find(p => { try { return fs.statSync(p).isDirectory(); } catch { return false; } });
+    return path.join(base || path.join(home, 'Documents'), 'Schoolwork');
+  }
   const od = process.env.OneDrive || process.env.OneDriveConsumer || process.env.OneDriveCommercial;
   let base;
   try { base = od || app.getPath('documents'); } catch { base = od || os.homedir(); }

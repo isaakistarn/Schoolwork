@@ -38,29 +38,45 @@ window pointing at `app/index.html`. Babel transpiles JSX in the browser at
 runtime (the React/Babel bundles are vendored under `app/vendor/` so the app
 works offline).
 
-## 2. Build the `.exe`
+## 2. Build the desktop binaries
 
 ```powershell
-npm run build:win        # NSIS installer + portable .exe (recommended)
+npm run build:win        # NSIS installer + portable .exe (run on Windows)
 npm run build:portable   # portable single-file .exe only
+npm run build:mac        # .dmg for arm64 + x64       (run on macOS only)
 ```
 
 Output lands in `dist/`:
 
 ```
 dist/
-├── Schoolwork-Setup-0.2.0-x64.exe        ← NSIS installer
-└── Schoolwork-Portable-0.2.0-x64.exe     ← portable single-file
+├── Schoolwork-Setup-0.2.0-x64.exe        ← Windows NSIS installer
+├── Schoolwork-Portable-0.2.0-x64.exe     ← Windows portable single-file
+├── Schoolwork-0.2.0-arm64.dmg            ← macOS Apple Silicon
+└── Schoolwork-0.2.0-x64.dmg              ← macOS Intel
 ```
 
-`electron-builder` reads the `build` block in `package.json`. The build
-targets x64, the installer is non-silent (the user picks the install
-directory), and creates Start Menu + Desktop shortcuts. The app icon is
-`logo.ico` (`build.win.icon`); regenerate it from `logo.svg` with
-`node tools/make-icon.js` (after `npm install --no-save sharp png-to-ico`).
+`electron-builder` reads the `build` block in `package.json`. The Windows build
+targets x64, the installer is non-silent (user picks the install directory),
+and creates Start Menu + Desktop shortcuts. The macOS build produces a `.dmg`
+per architecture under hardened-runtime entitlements (ready for notarization
+when you have an Apple Developer ID).
 
-To sign the executable, add `win.certificateFile` + `CSC_KEY_PASSWORD` or use
-Azure Trusted Signing — neither is wired up yet.
+> **mac builds need a Mac.** electron-builder's mac targets use macOS-only
+> tools (`hdiutil`, code-signing, icon conversion); they cannot be
+> cross-compiled from Windows. Run `npm run build:mac` on a Mac, or in a
+> `macos-latest` GitHub Actions runner.
+
+App icons: `logo.ico` (Windows, `build.win.icon`) and `build/icon.png` (macOS,
+which electron-builder converts to `.icns` at build time). Regenerate both
+from `logo.svg` with `node tools/make-icon.js` (after
+`npm install --no-save sharp png-to-ico`).
+
+To sign the Windows `.exe`, add `win.certificateFile` + `CSC_KEY_PASSWORD` or
+use Azure Trusted Signing. To sign + notarize the macOS `.dmg`, set
+`CSC_LINK`/`CSC_KEY_PASSWORD` for the Developer ID cert and
+`APPLE_ID`/`APPLE_APP_SPECIFIC_PASSWORD`/`APPLE_TEAM_ID` for notarization.
+None are wired up yet — unsigned local builds work for personal use.
 
 > **First-build gotcha (Windows):** electron-builder's `winCodeSign` helper is
 > a `.7z` containing macOS symlinks, and extracting it fails with *"A required
@@ -154,7 +170,10 @@ approach above covers that case with no infrastructure.
 
 `<app>` below is `schoolwork-dashboard` in development (`npm start`) and
 `Schoolwork` in the packaged/installed build — so the two run modes keep
-**separate** local data.
+**separate** local data. On macOS the equivalent of `%APPDATA%\<app>\` is
+`~/Library/Application Support/<app>/`; everything else (the synced folder, the
+`schoolwork:` localStorage namespace, encrypted tokens via Keychain) works the
+same way.
 
 | Artifact | Location | Encryption |
 | -------- | -------- | ---------- |
