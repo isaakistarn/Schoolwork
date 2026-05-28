@@ -440,4 +440,12 @@ function tint(hex, pct) {
   const m = -pct / 100; return rgbToHex(r * (1 - m), g * (1 - m), b * (1 - m));
 }
 
-ReactDOM.createRoot(document.getElementById("root")).render(<App />);
+// Pull any newer snapshot from the cloud-synced folder BEFORE React reads
+// localStorage, so the app mounts with this device's latest data; then arm the
+// auto-push that mirrors future changes back out. (No-ops in web-only mode.)
+(async () => {
+  try { await window.SyncBridge?.pullOnStartup?.(); }
+  catch (e) { console.warn("Schoolwork sync: startup pull failed", e); }
+  window.SyncBridge?.installAutoPush?.();
+  ReactDOM.createRoot(document.getElementById("root")).render(<App />);
+})();

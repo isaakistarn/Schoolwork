@@ -1,6 +1,7 @@
-const { app, BrowserWindow, ipcMain, shell, safeStorage, Menu } = require('electron');
+const { app, BrowserWindow, ipcMain, shell, safeStorage, Menu, dialog } = require('electron');
 const path = require('node:path');
 const fs = require('node:fs');
+const os = require('node:os');
 const GoogleCalendar = require('./google-calendar');
 const GoogleDrive = require('./google-drive');
 
@@ -183,4 +184,78 @@ ipcMain.handle('legal:read', (_e, which) => {
   const file = which === 'terms' ? 'TERMS.md' : 'PRIVACY.md';
   try { return fs.readFileSync(path.join(__dirname, file), 'utf8'); }
   catch { return null; }
+});
+
+/* ---------- IPC: cross-device sync via a cloud-synced folder ----------
+ *
+ * The renderer mirrors its entire `schoolwork:` localStorage namespace into
+ * ONE JSON snapshot living in a folder the OS already syncs between machines
+ * (OneDrive on Windows, Dropbox, Google Drive Desktop, …). The model is
+ * "last full snapshot wins"; this side just does the file I/O and folder
+ * picking. The sync config (folder + on/off) is machine-level — it lives in
+ * userData, NOT in the synced snapshot — so each device keeps its own path.
+ */
+const SYNC_FILE = 'schoolwork-sync.json';
+const syncConfigPath = () => path.join(userDataPath(), 'sync-config.json');
+const syncFilePath = (dir) => path.join(dir, SYNC_FILE);
+
+// Best-guess default: the user's OneDrive root (Windows sets these env vars),
+// falling back to Documents so there's always somewhere sensible to suggest.
+function defaultSyncDir() {
+  const od = process.env.OneDrive || process.env.OneDriveConsumer || process.env.OneDriveCommercial;
+  let base;
+  try { base = od || app.getPath('documents'); } catch { base = od || os.homedir(); }
+  return path.join(base, 'Schoolwork');
+}
+function loadSyncConfig() {
+  try { const c = JSON.parse(fs.readFileSync(syncConfigPath(), 'utf8')); return { enabled: !!c.enabled, dir: String(c.dir || '') }; }
+  catch { return { enabled: false, dir: '' }; }
+}
+function saveSyncConfig(cfg) {
+  const next = { enabled: !!(cfg && cfg.enabled), dir: String((cfg && cfg.dir) || '') };
+  fs.writeFileSync(syncConfigPath(), JSON.stringify(next, null, 2));
+  return next;
+}
+
+ipcMain.handle('sync:get-config', () => ({ ...loadSyncConfig(), defaultDir: defaultSyncDir(), device: os.hostname() }));
+ipcMain.handle('sync:set-config', (_e, cfg) => saveSyncConfig(cfg));
+
+ipcMain.handle('sync:pick-folder', async () => {
+  const res = await dialog.showOpenDialog(mainWindow, {
+    title: 'Choose a cloud-synced folder for Schoolwork',
+    buttonLabel: 'Use this folder',
+    properties: ['openDirectory', 'createDirectory'],
+    defaultPath: loadSyncConfig().dir || defaultSyncDir(),
+  });
+  return (res.canceled || !res.filePaths || !res.filePaths[0]) ? null : res.filePaths[0];
+});
+
+// Returns the parsed snapshot, or null when there's no folder / no file yet.
+ipcMain.handle('sync:read', () => {
+  const { dir } = loadSyncConfig();
+  if (!dir) return null;
+  try { return JSON.parse(fs.readFileSync(syncFilePath(dir), 'utf8')); }
+  catch { return null; }
+});
+
+// Atomic-ish write: a temp file then rename, so a half-written snapshot is
+// never visible to the cloud client (or the other machine) mid-flush.
+ipcMain.handle('sync:write', (_e, payload) => {
+  const { dir } = loadSyncConfig();
+  if (!dir) throw new Error('No sync folder configured.');
+  fs.mkdirSync(dir, { recursive: true });
+  const full = { ...(payload || {}), device: os.hostname() };
+  const tmp = path.join(dir, '.' + SYNC_FILE + '.tmp');
+  fs.writeFileSync(tmp, JSON.stringify(full, null, 2), 'utf8');
+  fs.renameSync(tmp, syncFilePath(dir));
+  return { ok: true, updatedAt: full.updatedAt, device: full.device };
+});
+
+// Lightweight status for the Settings panel (does the folder/file exist yet?).
+ipcMain.handle('sync:status', () => {
+  const { enabled, dir } = loadSyncConfig();
+  let folderExists = false, fileExists = false, mtime = null;
+  try { folderExists = fs.statSync(dir).isDirectory(); } catch {}
+  try { const st = fs.statSync(syncFilePath(dir)); fileExists = true; mtime = st.mtime.toISOString(); } catch {}
+  return { enabled, dir, folderExists, fileExists, mtime, device: os.hostname() };
 });

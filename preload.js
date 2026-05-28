@@ -30,4 +30,14 @@ contextBridge.exposeInMainWorld('schoolworkAPI', {
   legal: {
     read: (which) => ipcRenderer.invoke('legal:read', which),
   },
+
+  // Cross-device sync via a cloud-synced folder (OneDrive/Dropbox/…).
+  sync: {
+    getConfig:  ()        => ipcRenderer.invoke('sync:get-config'),
+    setConfig:  (cfg)     => ipcRenderer.invoke('sync:set-config', cfg),
+    pickFolder: ()        => ipcRenderer.invoke('sync:pick-folder'),
+    read:       ()        => ipcRenderer.invoke('sync:read'),
+    write:      (payload) => ipcRenderer.invoke('sync:write', payload),
+    status:     ()        => ipcRenderer.invoke('sync:status'),
+  },
 });

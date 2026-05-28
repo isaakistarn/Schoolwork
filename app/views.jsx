@@ -1700,6 +1700,7 @@ const SettingsView = ({ tweaks, setTweak, pushToast, onLogout }) => {
     { id: "subjects",   label: "Subjects",     icon: "courses" },
     { id: "notifications", label: "Notifications", icon: "bell" },
     { id: "connectors", label: "Connectors",   icon: "link" },
+    { id: "sync",       label: "Sync devices", icon: "refresh" },
     { id: "shortcuts",  label: "Shortcuts",    icon: "command" },
     { id: "storage",    label: "Data & storage", icon: "archive" },
     { id: "about",      label: "About",        icon: "help" },
@@ -1918,6 +1919,12 @@ const SettingsView = ({ tweaks, setTweak, pushToast, onLogout }) => {
               <window.GoogleConnector.Panel pushToast={pushToast} />
               <window.GoogleConnector.DrivePanel pushToast={pushToast} />
             </>
+          )}
+
+          {tab === "sync" && (
+            window.SyncBridge?.SyncPanel
+              ? <window.SyncBridge.SyncPanel pushToast={pushToast} />
+              : <SettingsSection title="Sync across devices" subtitle="Sync module unavailable." />
           )}
 
           {tab === "shortcuts" && (
