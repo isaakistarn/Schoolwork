@@ -1,6 +1,6 @@
 {
   "name": "schoolwork-dashboard",
-  "version": "0.2.1",
+  "version": "0.2.2",
   "description": "Schoolwork — a desktop study planner for Senior Secondary students. Electron-packaged app with local accounts, per-term profiles, and Google Calendar sync.",
   "main": "main.js",
   "author": "Isaak Simpson",
@@ -9,9 +9,9 @@
   "scripts": {
     "start": "electron .",
     "build": "electron-builder",
-    "build:win": "electron-builder --win --x64",
-    "build:portable": "electron-builder --win portable --x64",
-    "build:mac": "electron-builder --mac"
+    "build:win": "electron-builder --win --x64 -p never",
+    "build:portable": "electron-builder --win portable --x64 -p never",
+    "build:mac": "electron-builder --mac -p never"
   },
   "dependencies": {
     "googleapis": "^144.0.0"
