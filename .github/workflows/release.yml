@@ -1,0 +1,62 @@
+name: Release
+
+# Cuts a GitHub Release whenever a `v*` tag is pushed. Builds the Windows
+# installer + portable on a windows-latest runner and the macOS .dmg
+# (arm64 + x64) on a macos-latest runner in parallel, then attaches every
+# artifact from dist/ to the Release. The installed app polls the Releases
+# API on launch and shows the in-app update banner (see app/update-banner.jsx).
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: Build ${{ matrix.label }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            script: build:win
+            label: Windows
+          - os: macos-latest
+            script: build:mac
+            label: macOS
+    runs-on: ${{ matrix.os }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - run: npm ci
+
+      - name: Build ${{ matrix.label }}
+        run: npm run ${{ matrix.script }}
+        env:
+          # No code-signing cert in CI — produce unsigned artifacts. Drop these
+          # vars once a signing cert is added (Apple Developer ID for macOS,
+          # an EV/OV cert or Azure Trusted Signing for Windows).
+          CSC_IDENTITY_AUTO_DISCOVERY: 'false'
+
+      - name: Publish artifacts to the GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          # Both matrix jobs upload into the SAME release tied to the pushed
+          # tag; the action upserts, so order doesn't matter.
+          files: |
+            dist/*.exe
+            dist/*.dmg
+            dist/*.blockmap
+            dist/latest*.yml
+          fail_on_unmatched_files: false
+          draft: false
+          prerelease: false

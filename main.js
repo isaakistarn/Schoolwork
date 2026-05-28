@@ -2,6 +2,7 @@ const { app, BrowserWindow, ipcMain, shell, safeStorage, Menu, dialog } = requir
 const path = require('node:path');
 const fs = require('node:fs');
 const os = require('node:os');
+const https = require('node:https');
 const GoogleCalendar = require('./google-calendar');
 const GoogleDrive = require('./google-drive');
 
@@ -289,4 +290,59 @@ ipcMain.handle('sync:status', () => {
   try { folderExists = fs.statSync(dir).isDirectory(); } catch {}
   try { const st = fs.statSync(syncFilePath(dir)); fileExists = true; mtime = st.mtime.toISOString(); } catch {}
   return { enabled, dir, folderExists, fileExists, mtime, device: os.hostname() };
+});
+
+/* ---------- IPC: in-app update check (GitHub Releases, notify-only) ----------
+ *
+ * Polled by the renderer on launch. Hits the GitHub Releases API for the
+ * project repo and returns whether a newer tag is available. We deliberately
+ * do NOT apply updates in place — silent auto-update via electron-updater
+ * needs Apple Developer ID signing to work on macOS, so the renderer just
+ * shows a banner with a "Download" button that opens the release page.
+ *
+ * Change UPDATE_REPO if the repo is renamed or forked.
+ */
+const UPDATE_REPO = 'isaakistarn/Schoolwork';
+
+function fetchLatestRelease() {
+  return new Promise((resolve) => {
+    const req = https.get({
+      hostname: 'api.github.com',
+      path: '/repos/' + UPDATE_REPO + '/releases/latest',
+      headers: { 'User-Agent': 'Schoolwork-Updater', 'Accept': 'application/vnd.github+json' },
+      timeout: 6000,
+    }, (res) => {
+      if (res.statusCode !== 200) { res.resume(); resolve(null); return; }
+      let body = '';
+      res.setEncoding('utf8');
+      res.on('data', (c) => { body += c; });
+      res.on('end', () => {
+        try { const j = JSON.parse(body); resolve({ tag: j.tag_name, name: j.name, url: j.html_url }); }
+        catch { resolve(null); }
+      });
+    });
+    req.on('error', () => resolve(null));
+    req.on('timeout', () => { req.destroy(); resolve(null); });
+  });
+}
+
+// Numeric semver-ish comparison: handles "v0.3.0" or "0.3.0", missing parts
+// default to 0, anything unparseable also degrades to 0 so a malformed tag
+// can never be considered "newer" than the current version.
+function isNewerVersion(latest, current) {
+  const parts = (s) => String(s).replace(/^v/i, '').split('.').map((n) => Number(n) || 0);
+  const a = parts(latest), b = parts(current);
+  for (let i = 0; i < 3; i++) {
+    if ((a[i] || 0) > (b[i] || 0)) return true;
+    if ((a[i] || 0) < (b[i] || 0)) return false;
+  }
+  return false;
+}
+
+ipcMain.handle('updates:check', async () => {
+  const r = await fetchLatestRelease();
+  if (!r || !r.tag) return { available: false };
+  const current = app.getVersion();
+  const latest = String(r.tag).replace(/^v/i, '');
+  return { available: isNewerVersion(latest, current), current, latest, url: r.url, name: r.name };
 });

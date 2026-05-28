@@ -416,6 +416,7 @@ const AppInner = ({ tweaks, setTweak }) => {
       {workArea && <window.WorkArea assignmentId={workArea.assignmentId} onClose={() => setWorkArea(null)} pushToast={pushToast} />}
       <LimitModal notice={limitNotice} onClose={clearLimitNotice} />
       <ToastHost toasts={toasts} dismiss={dismissToast} />
+      {window.UpdateBanner && <window.UpdateBanner.Banner />}
 
       <TweaksPanel title="Tweaks">
         <TweakSection label="Appearance" />

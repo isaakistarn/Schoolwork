@@ -31,6 +31,11 @@ contextBridge.exposeInMainWorld('schoolworkAPI', {
     read: (which) => ipcRenderer.invoke('legal:read', which),
   },
 
+  // In-app update check (polls GitHub Releases — no silent install).
+  updates: {
+    check: () => ipcRenderer.invoke('updates:check'),
+  },
+
   // Cross-device sync via a cloud-synced folder (OneDrive/Dropbox/…).
   sync: {
     getConfig:  ()        => ipcRenderer.invoke('sync:get-config'),

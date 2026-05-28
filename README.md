@@ -187,14 +187,44 @@ same way.
 false (e.g. on a freshly installed Linux box with no keyring) the token file
 falls back to plain JSON — Electron will log a warning in dev mode.
 
-## 6. What's intentionally not done
+## 6. Releasing a new version
+
+The installed app polls **GitHub Releases** on launch and shows an in-app
+banner when a newer version exists (`app/update-banner.jsx` +
+`updates:check` IPC). A release is just a tagged build with the artifacts
+attached, produced by a GitHub Actions workflow:
+
+1. Bump `version` in `package.json` (e.g. `0.2.0` → `0.3.0`) and commit.
+2. Tag the commit and push it to GitHub:
+
+   ```bash
+   git tag v0.3.0
+   git push origin main --tags
+   ```
+
+3. `.github/workflows/release.yml` fires on the tag push, builds
+   `Schoolwork-Setup-…exe` and `Schoolwork-Portable-…exe` on a
+   `windows-latest` runner and `Schoolwork-…dmg` (arm64 + x64) on a
+   `macos-latest` runner in parallel, then attaches every artifact in
+   `dist/` to a Release named after the tag.
+4. Each installed copy sees the new release on its next launch and prompts
+   the user to download — clicking opens the Release page in their browser.
+
+To build a release without CI, run `npm run build:win` on Windows or
+`npm run build:mac` on the Mac and upload the `dist/` artifacts to a new
+Release on github.com by hand. The version comparison and notification work
+either way — it's the **GitHub Release** the app watches, not how it got there.
+
+## 7. What's intentionally not done
 
 - **Code signing.** `electron-builder` will produce an unsigned `.exe`.
   Windows SmartScreen will warn first-run users until you sign with an EV
   or OV certificate, or migrate to Azure Trusted Signing.
-- **Auto-update.** Wire `electron-updater` to a GitHub Releases feed when
-  you're ready to ship updates without rebuilding installers. (Cross-device
-  *data* sync is implemented — §4 — but app-binary updates are still manual.)
+- **Silent in-place auto-update.** The app polls GitHub Releases on launch
+  and shows an in-app banner when a newer version exists (§6), but applying
+  the update is still a manual reinstall. Silent in-place auto-update via
+  `electron-updater` would need Apple Developer ID signing to work
+  end-to-end on macOS, so it isn't wired up.
 - **Production React/Babel bundle.** Babel transpiles JSX at runtime which
   costs ~300 ms on launch. For shipping at scale, run a one-shot Vite or
   esbuild step in CI that outputs pre-compiled JS, and drop `babel.min.js`
@@ -202,4 +232,3 @@ falls back to plain JSON — Electron will log a warning in dev mode.
 - **Real-time / multi-user backend.** Single-user device sync works via a
   cloud-synced folder (§4); a live multi-user backend (Firestore / Supabase /
   CRDT) is documented but not implemented.
-</content>
