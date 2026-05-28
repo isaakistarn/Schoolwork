@@ -1,9 +1,12 @@
 const { contextBridge, ipcRenderer } = require('electron');
 
+const pkg = require('./package.json');
+
 contextBridge.exposeInMainWorld('schoolworkAPI', {
   // Detect that we're in Electron (renderer code falls back to web-only mode otherwise)
   isDesktop: true,
   platform: process.platform,
+  appVersion: pkg.version,
 
   // Scope Google credentials to the signed-in account.
   setAccount: (id) => ipcRenderer.invoke('app:set-account', id),

@@ -1956,7 +1956,7 @@ const SettingsView = ({ tweaks, setTweak, pushToast, onLogout }) => {
             <>
               <SettingsSection title="About Schoolwork" subtitle="A desktop study planner for Senior Secondary students.">
                 <dl className="dl">
-                  <dt>Version</dt><dd>0.2.0</dd>
+                  <dt>Version</dt><dd>{(typeof window !== "undefined" && window.schoolworkAPI && window.schoolworkAPI.appVersion) || "—"}</dd>
                   <dt>Storage</dt><dd>Local (this device)</dd>
                   <dt>Signed in as</dt><dd>{account?.email}</dd>
                   <dt>Plan</dt><dd>{isUnlimited ? "Unlimited" : "Free"}</dd>

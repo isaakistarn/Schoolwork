@@ -1,6 +1,6 @@
 {
   "name": "schoolwork-dashboard",
-  "version": "0.2.4",
+  "version": "0.2.5",
   "description": "Schoolwork — a desktop study planner for Senior Secondary students. Electron-packaged app with local accounts, per-term profiles, and Google Calendar sync.",
   "main": "main.js",
   "author": "Isaak Simpson",
