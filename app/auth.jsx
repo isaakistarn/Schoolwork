@@ -161,6 +161,45 @@ const Auth = (() => {
       setSession(null);
     }, []);
 
+    /* Password reset uses Supabase's OTP recovery flow: resetPasswordForEmail
+       triggers an email containing {{ .Token }} (a 6-digit code), the user
+       pastes it back in, verifyOtp gives us a session, and updateUser sets
+       the new password. No redirect URL is involved — works inside Electron
+       without a custom protocol handler. */
+    const sendPasswordReset = useCallback(async ({ email }) => {
+      if (!supabaseClient) return { ok: false, error: "Cloud auth isn't configured on this build." };
+      const em = normalizeEmail(email);
+      if (!em) return { ok: false, error: "Enter the email on your account." };
+      const { error } = await supabaseClient.auth.resetPasswordForEmail(em);
+      if (error) return { ok: false, error: error.message };
+      return { ok: true };
+    }, []);
+
+    const confirmPasswordReset = useCallback(async ({ email, code, newPassword }) => {
+      if (!supabaseClient) return { ok: false, error: "Cloud auth isn't configured on this build." };
+      const em = normalizeEmail(email);
+      const token = (code || "").replace(/\s+/g, "");
+      if (!em || !token) return { ok: false, error: "Enter the code from your email." };
+      if (!newPassword || newPassword.length < 6) return { ok: false, error: "New password must be at least 6 characters." };
+
+      const verify = await supabaseClient.auth.verifyOtp({ email: em, token, type: "recovery" });
+      if (verify.error) {
+        const msg = /expired|invalid|otp/i.test(verify.error.message)
+          ? "That code is invalid or has expired. Request a new one."
+          : verify.error.message;
+        return { ok: false, error: msg };
+      }
+
+      const upd = await supabaseClient.auth.updateUser({ password: newPassword });
+      if (upd.error) return { ok: false, error: upd.error.message };
+
+      // Drop the transient recovery session so the user lands back on the
+      // login form and signs in fresh with the new password.
+      try { await supabaseClient.auth.signOut(); } catch {}
+      setSession(null);
+      return { ok: true };
+    }, []);
+
     const account = session ? accounts.find(a => a.id === session.accountId) || null : null;
 
     const updateAccount = useCallback((patch) => {
@@ -172,6 +211,7 @@ const Auth = (() => {
     const setPrefs = (patch) => updateAccount({ prefs: { ...prefs, ...patch } });
     const value = {
       account, accounts, signup, login, logout, updateAccount,
+      sendPasswordReset, confirmPasswordReset,
       tier: "unlimited", isUnlimited: true,
       limits: UNLIMITED_LIMITS,
       FREE_LIMITS,
@@ -217,28 +257,62 @@ const Auth = (() => {
      Login / signup screen
      ============================================================ */
   const LoginScreen = () => {
-    const { login, signup, cloudConfigured } = useAuth();
+    const { login, signup, sendPasswordReset, confirmPasswordReset, cloudConfigured } = useAuth();
+    /* mode: "login" | "signup" | "forgot"
+       forgotStep: "request" (collect email + send code) | "confirm" (enter code + new pw) */
     const [mode, setMode] = useState("login");
+    const [forgotStep, setForgotStep] = useState("request");
     const [name, setName] = useState("");
     const [email, setEmail] = useState("");
     const [password, setPassword] = useState("");
+    const [resetCode, setResetCode] = useState("");
+    const [newPassword, setNewPassword] = useState("");
     const [error, setError] = useState("");
+    const [notice, setNotice] = useState("");
     const [busy, setBusy] = useState(false);
     const [show, setShow] = useState(false);
     const [legal, setLegal] = useState(null);
     const [school, setSchool] = useState("generic");
     const SCHOOLS = (window.SchoolworkData && window.SchoolworkData.SCHOOLS) || [];
 
+    const switchMode = (m) => {
+      setMode(m);
+      setForgotStep("request");
+      setError("");
+      setNotice("");
+      setResetCode("");
+      setNewPassword("");
+    };
+
     const submit = async (e) => {
       e.preventDefault();
       if (busy) return;
       setError("");
+      setNotice("");
       setBusy(true);
       try {
-        const res = mode === "login"
-          ? await login({ email, password })
-          : await signup({ name, email, password, school });
-        if (!res.ok) setError(res.error);
+        if (mode === "login") {
+          const res = await login({ email, password });
+          if (!res.ok) setError(res.error);
+        } else if (mode === "signup") {
+          const res = await signup({ name, email, password, school });
+          if (!res.ok) setError(res.error);
+        } else if (mode === "forgot" && forgotStep === "request") {
+          const res = await sendPasswordReset({ email });
+          if (!res.ok) setError(res.error);
+          else {
+            setForgotStep("confirm");
+            setNotice("We sent a 6-digit code to that email. Check your inbox (and spam).");
+          }
+        } else if (mode === "forgot" && forgotStep === "confirm") {
+          const res = await confirmPasswordReset({ email, code: resetCode, newPassword });
+          if (!res.ok) setError(res.error);
+          else {
+            switchMode("login");
+            setPassword("");
+            setNotice("Password reset. Sign in with your new password.");
+          }
+        }
       } finally {
         setBusy(false);
       }
@@ -262,9 +336,16 @@ const Auth = (() => {
 
         <div className="auth-main">
           <form className="auth-card" onSubmit={submit}>
-            <h1>{mode === "login" ? "Welcome back" : "Create your account"}</h1>
+            <h1>
+              {mode === "login" && "Welcome back"}
+              {mode === "signup" && "Create your account"}
+              {mode === "forgot" && (forgotStep === "request" ? "Reset your password" : "Enter your reset code")}
+            </h1>
             <p className="auth-card-sub">
-              {mode === "login" ? "Sign in to your study workspace." : "Set up a cloud account to get started."}
+              {mode === "login" && "Sign in to your study workspace."}
+              {mode === "signup" && "Set up a cloud account to get started."}
+              {mode === "forgot" && forgotStep === "request" && "We'll email you a 6-digit code to set a new password."}
+              {mode === "forgot" && forgotStep === "confirm" && "Paste the code from your email and choose a new password."}
             </p>
 
             {mode === "signup" && (
@@ -282,32 +363,74 @@ const Auth = (() => {
                 <span style={{ fontSize: 11, color: "var(--fg-tertiary)", fontWeight: 400 }}>Pre-fills your term dates — you can edit them later in Settings.</span>
               </label>
             )}
-            <label className="auth-field">
-              <span>Email</span>
-              <input className="input" type="email" value={email} onChange={e => setEmail(e.target.value)} placeholder="you@school.edu.au" autoFocus={mode === "login"} />
-            </label>
-            <label className="auth-field">
-              <span>Password</span>
-              <div className="auth-pass">
-                <input className="input" type={show ? "text" : "password"} value={password} onChange={e => setPassword(e.target.value)} placeholder="••••••••" />
-                <button type="button" className="btn btn-tertiary btn-sm" onClick={() => setShow(s => !s)}>{show ? "Hide" : "Show"}</button>
-              </div>
-            </label>
+            {!(mode === "forgot" && forgotStep === "confirm") && (
+              <label className="auth-field">
+                <span>Email</span>
+                <input className="input" type="email" value={email} onChange={e => setEmail(e.target.value)} placeholder="you@school.edu.au" autoFocus={mode === "login"} />
+              </label>
+            )}
+            {(mode === "login" || mode === "signup") && (
+              <label className="auth-field">
+                <span>Password</span>
+                <div className="auth-pass">
+                  <input className="input" type={show ? "text" : "password"} value={password} onChange={e => setPassword(e.target.value)} placeholder="••••••••" />
+                  <button type="button" className="btn btn-tertiary btn-sm" onClick={() => setShow(s => !s)}>{show ? "Hide" : "Show"}</button>
+                </div>
+              </label>
+            )}
+            {mode === "forgot" && forgotStep === "confirm" && (
+              <>
+                <label className="auth-field">
+                  <span>Reset code</span>
+                  <input className="input" inputMode="numeric" autoComplete="one-time-code" value={resetCode} onChange={e => setResetCode(e.target.value)} placeholder="123456" autoFocus />
+                </label>
+                <label className="auth-field">
+                  <span>New password</span>
+                  <div className="auth-pass">
+                    <input className="input" type={show ? "text" : "password"} value={newPassword} onChange={e => setNewPassword(e.target.value)} placeholder="At least 6 characters" />
+                    <button type="button" className="btn btn-tertiary btn-sm" onClick={() => setShow(s => !s)}>{show ? "Hide" : "Show"}</button>
+                  </div>
+                </label>
+              </>
+            )}
 
             {!cloudConfigured && (
               <div className="auth-error" role="alert"><Icon name="circle-warn" size={14} /> Cloud auth isn't configured on this build. Contact the developer.</div>
             )}
             {error && <div className="auth-error" role="alert"><Icon name="circle-warn" size={14} /> {error}</div>}
+            {notice && !error && (
+              <div className="auth-error" role="status" style={{ background: "var(--surface-accent-soft, rgba(80,160,255,.08))", color: "var(--fg-primary)", borderColor: "var(--border-accent, rgba(80,160,255,.35))" }}>
+                <Icon name="check" size={14} /> {notice}
+              </div>
+            )}
 
             <button className="btn btn-primary auth-submit" type="submit" disabled={busy || !cloudConfigured}>
-              {busy ? (mode === "login" ? "Signing in…" : "Creating account…") : (mode === "login" ? "Sign in" : "Create account")}
+              {busy
+                ? (mode === "login" ? "Signing in…" : mode === "signup" ? "Creating account…" : forgotStep === "request" ? "Sending code…" : "Resetting password…")
+                : (mode === "login" ? "Sign in" : mode === "signup" ? "Create account" : forgotStep === "request" ? "Send reset code" : "Reset password")}
             </button>
 
             <div className="auth-switch">
-              {mode === "login" ? (
-                <>New here? <button type="button" onClick={() => { setMode("signup"); setError(""); }}>Create an account</button></>
-              ) : (
-                <>Already have an account? <button type="button" onClick={() => { setMode("login"); setError(""); }}>Sign in</button></>
+              {mode === "login" && (
+                <>
+                  <button type="button" onClick={() => switchMode("forgot")}>Forgot password?</button>
+                  <span style={{ margin: "0 8px", color: "var(--fg-tertiary)" }}>·</span>
+                  New here? <button type="button" onClick={() => switchMode("signup")}>Create an account</button>
+                </>
+              )}
+              {mode === "signup" && (
+                <>Already have an account? <button type="button" onClick={() => switchMode("login")}>Sign in</button></>
+              )}
+              {mode === "forgot" && (
+                <>
+                  {forgotStep === "confirm" && (
+                    <>
+                      <button type="button" onClick={() => { setForgotStep("request"); setError(""); setNotice(""); }}>Resend code</button>
+                      <span style={{ margin: "0 8px", color: "var(--fg-tertiary)" }}>·</span>
+                    </>
+                  )}
+                  <button type="button" onClick={() => switchMode("login")}>Back to sign in</button>
+                </>
               )}
             </div>
             <div className="auth-legal">
