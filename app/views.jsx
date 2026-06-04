@@ -159,8 +159,10 @@ const Dashboard = ({ onOpen, onNavigate, onQuickAdd }) => {
                 {upcoming.map(a => {
                   const c = courseById(a.course);
                   const done = a.status === "graded" || a.status === "submitted";
-                  // Show the draft milestone as the deadline while it's still ahead.
-                  const useDraft = a.draftDue && new Date(a.draftDue) >= now;
+                  // Show the draft milestone as the next deadline while it's still
+                  // ahead AND hasn't been submitted yet. Otherwise fall back to
+                  // the final due date.
+                  const useDraft = a.draftDue && !a.draftSubmittedAt && new Date(a.draftDue) >= now;
                   const dueIso = useDraft ? a.draftDue : a.due;
                   const du = fmt.daysUntil(dueIso, done);
                   return (
@@ -480,7 +482,7 @@ const CalendarView = ({ pushToast }) => {
       if (isoDate(new Date(a.due)) === dStr) {
         const t = new Date(a.due); out.push({ key: "due" + a.id, kind: "due", title: a.title + " — due", start: pad2(t.getHours()) + ":" + pad2(t.getMinutes()), end: null, color: "#A8551A", sub: courseById(a.course)?.code });
       }
-      if (a.draftDue && isoDate(new Date(a.draftDue)) === dStr) {
+      if (a.draftDue && !a.draftSubmittedAt && isoDate(new Date(a.draftDue)) === dStr) {
         const t = new Date(a.draftDue); out.push({ key: "draft" + a.id, kind: "due", title: a.title + " — draft due", start: pad2(t.getHours()) + ":" + pad2(t.getMinutes()), end: null, color: "#7A4FAA", sub: courseById(a.course)?.code });
       }
     });
@@ -1378,7 +1380,11 @@ const Inspector = ({ assignmentId, onClose, onOpenWorkArea, onDelete, pushToast 
               <dt>Draft due</dt>
               <dd>
                 <EditableDateTime value={a.draftDue} onChange={(v) => updateAssignment(a.id, { draftDue: v })} render={(v) => <span>{fmt.dateLong(v)} at {fmt.time(v)}</span>} />
-                <div style={{ fontSize: 11, color: "var(--fg-tertiary)", marginTop: 2 }}>Draft milestone{editMode ? "" : " · "}{!editMode && <a href="#" onClick={(e) => { e.preventDefault(); updateAssignment(a.id, { draftDue: null }); }}>remove</a>}</div>
+                <div style={{ fontSize: 11, color: "var(--fg-tertiary)", marginTop: 2 }}>
+                  Draft milestone
+                  {a.draftSubmittedAt && <> · <Badge tone="success">Draft submitted {fmt.dateLong(a.draftSubmittedAt)}</Badge></>}
+                  {!editMode && !a.draftSubmittedAt && <> · <a href="#" onClick={(e) => { e.preventDefault(); updateAssignment(a.id, { draftDue: null }); }}>remove</a></>}
+                </div>
               </dd>
             </>
           )}
@@ -1503,12 +1509,40 @@ const Inspector = ({ assignmentId, onClose, onOpenWorkArea, onDelete, pushToast 
           <button className="btn btn-primary" style={{ width: "100%" }} onClick={() => onOpenWorkArea && onOpenWorkArea(a.id)}>
             <Icon name="link" size={14} /> Open work area
           </button>
+
+          {/* Draft and final submissions are tracked independently. The draft
+              button only appears when the assignment has a draftDue — ticking
+              it stamps `draftSubmittedAt` but leaves `status` alone so the
+              final-due tracking and grade flow are unaffected. */}
+          {a.draftDue && (
+            a.draftSubmittedAt ? (
+              <button
+                className="btn btn-tertiary"
+                style={{ width: "100%" }}
+                title={"Marked submitted " + fmt.dateLong(a.draftSubmittedAt) + " at " + fmt.time(a.draftSubmittedAt)}
+                onClick={() => updateAssignment(a.id, { draftSubmittedAt: null })}
+              >
+                <Icon name="refresh" size={14} /> Re-open draft
+              </button>
+            ) : (
+              <button
+                className="btn btn-secondary"
+                style={{ width: "100%" }}
+                onClick={() => updateAssignment(a.id, { draftSubmittedAt: new Date().toISOString() })}
+              >
+                <Icon name="check" size={14} /> Submit draft
+              </button>
+            )
+          )}
+
           <button
             className="btn btn-secondary"
             style={{ width: "100%" }}
             onClick={() => updateAssignment(a.id, { status: a.status === "submitted" || a.status === "graded" ? "in_progress" : "submitted" })}
           >
-            {a.status === "submitted" || a.status === "graded" ? "Re-open for edits" : "Mark as submitted"}
+            {a.status === "submitted" || a.status === "graded"
+              ? "Re-open for edits"
+              : (a.draftDue ? "Submit final" : "Mark as submitted")}
           </button>
         </div>
       </div>

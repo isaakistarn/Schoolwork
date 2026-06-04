@@ -47,6 +47,11 @@ const PRIORITY_LABEL = { low: "Low", med: "Medium", high: "High" };
    ============================================================ */
 const isEssay = (type) => /essay/i.test(type || "");
 
+/* Returns true when this assignment carries a draft deadline that hasn't
+   been ticked off yet. Used to decide whether the draft date is still the
+   "next deadline" or whether the row should switch to the final due date. */
+const hasOpenDraft = (a) => !!(a && a.draftDue && !a.draftSubmittedAt);
+
 /* ============================================================
    QCE summative assessment instruments.
 
@@ -182,7 +187,7 @@ window.SchoolworkData = {
   DEFAULT_CALENDARS, DEFAULT_TERMS, SCHOOLS, termsForSchool,
   STATUS_LABEL, STATUS_BADGE, PRIORITY_LABEL, TYPES_BY_COURSE,
   termState, termWeeks, termDatesLabel,
-  isEssay, autoPriority,
+  isEssay, autoPriority, hasOpenDraft,
   ASSESSMENT_KINDS, ASSESSMENT_LABEL, ASSESSMENT_FULL, ASSESSMENT_DEFAULT_WEIGHT,
   isSummative, classGrade,
   seedProfile,

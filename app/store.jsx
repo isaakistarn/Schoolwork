@@ -164,7 +164,8 @@ const StoreProvider = ({ children }) => {
         type: row.type || "Homework",
         assessment,                       // QCE instrument that counts toward the class grade
         due: row.due || new Date(Date.now() + 7 * 864e5).toISOString().slice(0, 16),
-        draftDue: row.draftDue || null,   // essays: optional earlier draft milestone
+        draftDue: row.draftDue || null,           // optional earlier draft milestone
+        draftSubmittedAt: row.draftSubmittedAt || null, // ISO timestamp, independent of `status`
         status: row.status || "not_started",
         priority: row.priority || "med",
         weight: row.weight ?? (seed.ASSESSMENT_DEFAULT_WEIGHT[assessment] ?? 5),

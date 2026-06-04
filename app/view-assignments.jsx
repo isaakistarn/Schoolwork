@@ -72,7 +72,9 @@ const AssignmentsView = ({ onOpen, onOpenWorkArea, onDelete, onNew, selected, se
       title:    r => r.title.toLowerCase(),
       course:   r => courseById(r.course).code,
       type:     r => r.type,
-      due:      r => new Date(r.draftDue || r.due).getTime(),
+      // Sort by whichever deadline the row is actually advertising — draft
+      // when it's still open, final once the draft is ticked off.
+      due:      r => new Date((r.draftDue && !r.draftSubmittedAt) ? r.draftDue : r.due).getTime(),
       priority: r => ({ high: 0, med: 1, low: 2 }[r.priority]),
       status:   r => Object.keys(STATUS_LABEL).indexOf(r.status),
       weight:   r => r.weight,
@@ -227,10 +229,12 @@ const AssignmentsView = ({ onOpen, onOpenWorkArea, onDelete, onNew, selected, se
               {pageRows.map(row => {
                 const c = courseById(row.course);
                 const done = row.status === "graded" || row.status === "submitted";
-                // When a draft milestone is set, show it as the due date with a
-                // "(D)" marker — it's the deadline you're working toward next.
-                const isDraft = !!row.draftDue;
-                const dueIso = row.draftDue || row.due;
+                // When a draft milestone is set AND not yet submitted, show it
+                // as the next due date with a "(D)" marker. Once the draft is
+                // submitted, fall back to the final due date so the row always
+                // shows the deadline you're actually working toward.
+                const isDraft = !!row.draftDue && !row.draftSubmittedAt;
+                const dueIso = isDraft ? row.draftDue : row.due;
                 const du = fmt.daysUntil(dueIso, done);
                 const isSel = selected.includes(row.id);
                 return (

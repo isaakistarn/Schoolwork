@@ -26,6 +26,87 @@ Schoolwork/
 └── README.md                 this file
 ```
 
+## Install Schoolwork (for users)
+
+You don't need any developer tools to use Schoolwork — just download the
+installer for your operating system. The whole thing is **free** and runs
+fully on your computer; nothing is uploaded to a server.
+
+### Step 1 — Download the installer
+
+1. Open the Releases page:
+   **<https://github.com/isaakistarn/Schoolwork/releases/latest>**
+2. Scroll to the **Assets** section at the bottom of the release.
+3. Click the file that matches your computer:
+
+   | Your computer | Download this file |
+   | --- | --- |
+   | **Windows** (recommended) | `Schoolwork-Setup-X.Y.Z-x64.exe` — installs into your user folder, creates a Start Menu shortcut, and auto-updates from here on. |
+   | **Windows** (no install, run-from-USB) | `Schoolwork-Portable-X.Y.Z-x64.exe` — single file, no installer. Doesn't auto-update. |
+   | **macOS** (Apple Silicon — M1/M2/M3/M4 Macs from 2020 onwards) | `Schoolwork-X.Y.Z-arm64.dmg` |
+   | **macOS** (Intel Macs from before 2020) | `Schoolwork-X.Y.Z-x64.dmg` |
+
+   *(X.Y.Z is whatever the latest version number happens to be — e.g. `0.3.2`.)*
+
+### Step 2 — Run it (Windows)
+
+1. Double-click the `.exe` you just downloaded.
+2. **A blue "Windows protected your PC" box may appear.** That's because
+   the installer isn't signed with a paid Microsoft certificate — Windows
+   shows this for any small developer's app. To get past it:
+   - Click the small **More info** link.
+   - Click the **Run anyway** button that appears.
+3. The Schoolwork installer opens. Click through — you can change the
+   install location if you want, or just accept the defaults.
+4. When it finishes, launch Schoolwork from the Start Menu or your
+   Desktop shortcut.
+
+### Step 2 — Run it (macOS)
+
+1. Double-click the `.dmg` file. A window opens showing the Schoolwork
+   icon.
+2. Drag the Schoolwork icon into the Applications folder shown in the
+   same window.
+3. Open **Applications**, find **Schoolwork**, and **right-click → Open**
+   (not double-click — the first time only). Click **Open** when macOS
+   asks if you really want to.
+   - **Why right-click?** macOS blocks apps it doesn't recognise on the
+     first launch unless you specifically opt in. Right-click → Open is
+     Apple's official workaround for unsigned apps. After this first
+     time, you can double-click Schoolwork normally.
+   - **If you only see "Cancel" and no Open button** (newer macOS):
+     System Settings → **Privacy & Security** → scroll down and click
+     **Open Anyway** next to the Schoolwork notice.
+
+### Step 3 — First launch
+
+1. Schoolwork opens to a **sign-in screen**. The first time, click
+   **Create account** — your account lives only on this computer.
+2. Pick your school from the list (or **Other / set my own dates**) so
+   the term dates are pre-filled.
+3. Add the subjects you're studying this term, and you're in.
+
+### Updates
+
+You don't need to come back to this page for updates. Whenever a new
+version is released, Schoolwork shows a small banner in the bottom-right
+corner with an **Update now** button. It downloads the new version
+inside the app, then asks you to **Restart to install**. The whole thing
+takes about a minute on a normal connection.
+
+The only time you'd revisit this page is to install Schoolwork on a
+**new computer** — or to grab the macOS DMG manually, since macOS
+auto-update needs paid Apple developer signing that isn't set up yet.
+
+### Sync between two computers (optional)
+
+If you want your Schoolwork data on a laptop *and* a desktop, see the
+**Sync between devices** section further down — it uses your existing
+OneDrive (or Dropbox / Google Drive) folder, with no extra account or
+setup beyond pointing both computers at the same folder.
+
+---
+
 ## 1. Run in development
 
 ```powershell
@@ -234,14 +315,15 @@ either way — it's the **GitHub Release** the app watches, not how it got there
 
 ## 7. What's intentionally not done
 
-- **Code signing.** `electron-builder` will produce an unsigned `.exe`.
-  Windows SmartScreen will warn first-run users until you sign with an EV
-  or OV certificate, or migrate to Azure Trusted Signing.
-- **Silent in-place auto-update.** The app polls GitHub Releases on launch
-  and shows an in-app banner when a newer version exists (§6), but applying
-  the update is still a manual reinstall. Silent in-place auto-update via
-  `electron-updater` would need Apple Developer ID signing to work
-  end-to-end on macOS, so it isn't wired up.
+- **Code signing.** `electron-builder` will produce an unsigned `.exe` and an
+  unsigned `.app`. Windows SmartScreen will warn first-run users (see
+  *Install Schoolwork* above) until you sign with an EV or OV certificate, or
+  migrate to Azure Trusted Signing.
+- **In-place auto-update on macOS.** Auto-update works end-to-end on Windows
+  via `electron-updater` (§6), but on macOS the same library refuses to
+  install an unsigned `.app`. The banner falls back to opening the release
+  page in the user's browser. Set `FORCE_INPLACE_MAC=1` once you have an
+  Apple Developer ID to switch macOS over to the in-place path.
 - **Production React/Babel bundle.** Babel transpiles JSX at runtime which
   costs ~300 ms on launch. For shipping at scale, run a one-shot Vite or
   esbuild step in CI that outputs pre-compiled JS, and drop `babel.min.js`

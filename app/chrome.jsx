@@ -313,6 +313,10 @@ const StatusBar = ({ selectionCount, syncTime, density, onDensity }) => {
   const { courses, workspaceName } = useStore();
   const credits = courses.reduce((s, c) => s + (c.credits || 0), 0);
   const yearLabel = (workspaceName || "").split(" — ")[0] || "Year 12";
+  // Pull the version out of the preload bridge (bundled from package.json) so
+  // this label always reflects what's actually running — no hardcoded string
+  // to forget about at release time. Falls back to "dev" in web-only mode.
+  const appVersion = (typeof window !== "undefined" && window.schoolworkAPI && window.schoolworkAPI.appVersion) || "dev";
   return (
     <footer className="statusbar" role="contentinfo">
       <div className="sb-group">
@@ -326,7 +330,7 @@ const StatusBar = ({ selectionCount, syncTime, density, onDensity }) => {
         <span className="sb-item">Density:</span>
         <button className="sb-item" style={{ color: density === "compact" ? "var(--accent)" : undefined, cursor: "pointer" }} onClick={() => onDensity("compact")}>Compact</button>
         <button className="sb-item" style={{ color: density === "comfortable" ? "var(--accent)" : undefined, cursor: "pointer" }} onClick={() => onDensity("comfortable")}>Comfortable</button>
-        <span className="sb-item">v0.2.0</span>
+        <span className="sb-item" title={"Schoolwork " + appVersion}>v{appVersion}</span>
       </div>
     </footer>
   );
