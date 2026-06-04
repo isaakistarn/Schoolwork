@@ -49,9 +49,20 @@ contextBridge.exposeInMainWorld('schoolworkAPI', {
     read: (which) => ipcRenderer.invoke('legal:read', which),
   },
 
-  // In-app update check (polls GitHub Releases — no silent install).
+  // In-app update lifecycle. On Windows: download → click-through NSIS wizard →
+  // app relaunches. On macOS (unsigned) `check()` returns mode:"browser" and the
+  // banner falls back to opening the release page in the user's browser.
   updates: {
-    check: () => ipcRenderer.invoke('updates:check'),
+    check:    ()                  => ipcRenderer.invoke('updates:check'),
+    download: ()                  => ipcRenderer.invoke('updates:download'),
+    install:  ()                  => ipcRenderer.invoke('updates:install'),
+    on:       (channel, listener) => {
+      const allowed = new Set(['updates:available', 'updates:none', 'updates:progress', 'updates:ready', 'updates:error']);
+      if (!allowed.has(channel)) return () => {};
+      const wrapped = (_e, payload) => listener(payload);
+      ipcRenderer.on(channel, wrapped);
+      return () => ipcRenderer.removeListener(channel, wrapped); // teardown for React effects
+    },
   },
 
   // Cross-device sync via a cloud-synced folder (OneDrive/Dropbox/…).

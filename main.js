@@ -3,6 +3,7 @@ const path = require('node:path');
 const fs = require('node:fs');
 const os = require('node:os');
 const https = require('node:https');
+const { autoUpdater } = require('electron-updater');
 const GoogleCalendar = require('./google-calendar');
 const GoogleDrive = require('./google-drive');
 
@@ -292,18 +293,62 @@ ipcMain.handle('sync:status', () => {
   return { enabled, dir, folderExists, fileExists, mtime, device: os.hostname() };
 });
 
-/* ---------- IPC: in-app update check (GitHub Releases, notify-only) ----------
+/* ---------- IPC: in-app update flow (electron-updater + GitHub Releases) ----------
  *
- * Polled by the renderer on launch. Hits the GitHub Releases API for the
- * project repo and returns whether a newer tag is available. We deliberately
- * do NOT apply updates in place — silent auto-update via electron-updater
- * needs Apple Developer ID signing to work on macOS, so the renderer just
- * shows a banner with a "Download" button that opens the release page.
+ * The renderer drives the lifecycle through IPC:
+ *
+ *   1. `updates:check`   → look at the publish channel (GitHub) for a newer
+ *                          tag. Returns { available, current, latest, url, name }.
+ *                          On macOS without a Developer ID-signed build,
+ *                          electron-updater can't install in place, so we
+ *                          fall back to the GitHub Releases API and pass the
+ *                          release URL back to the renderer to open in the
+ *                          browser — same UX as the old banner.
+ *   2. `updates:download` → start the binary download (Windows NSIS). Progress
+ *                          and completion are broadcast as `updates:progress`
+ *                          and `updates:ready` to every renderer window.
+ *   3. `updates:install`  → `quitAndInstall(true, true)` — quits the app and
+ *                          runs the NSIS wizard (oneClick: false), then
+ *                          relaunches once the user clicks through.
+ *
+ * We deliberately keep autoDownload OFF so nothing happens behind the user's
+ * back. The banner asks before starting the download, and again before
+ * restarting to install.
  *
  * Change UPDATE_REPO if the repo is renamed or forked.
  */
 const UPDATE_REPO = 'isaakistarn/Schoolwork';
 
+autoUpdater.autoDownload = false;
+autoUpdater.autoInstallOnAppQuit = false;
+autoUpdater.allowDowngrade = false;
+// `app.isPackaged` is false in `npm start` — dev runs would 404 on the
+// publish channel and clutter the console with errors. The renderer just
+// won't see any update events in dev, which is the right behaviour.
+autoUpdater.forceDevUpdateConfig = false;
+
+const broadcast = (channel, payload) => {
+  BrowserWindow.getAllWindows().forEach((w) => {
+    try { w.webContents.send(channel, payload); } catch {}
+  });
+};
+
+autoUpdater.on('update-available', (info) => {
+  broadcast('updates:available', { latest: info.version, notes: info.releaseNotes || '', name: info.releaseName || ('v' + info.version) });
+});
+autoUpdater.on('update-not-available', () => broadcast('updates:none'));
+autoUpdater.on('download-progress', (p) => broadcast('updates:progress', {
+  percent: Math.round(p.percent || 0),
+  transferred: p.transferred || 0,
+  total: p.total || 0,
+  bytesPerSecond: p.bytesPerSecond || 0,
+}));
+autoUpdater.on('update-downloaded', (info) => broadcast('updates:ready', { latest: info.version }));
+autoUpdater.on('error', (err) => broadcast('updates:error', { message: String((err && err.message) || err || 'Update failed') }));
+
+/* macOS fallback — when the app isn't Developer ID-signed, electron-updater
+   can't install in place. Hit the GitHub Releases API directly so the
+   renderer can still show "Update available" and route users to the DMG. */
 function fetchLatestRelease() {
   return new Promise((resolve) => {
     const req = https.get({
@@ -325,10 +370,6 @@ function fetchLatestRelease() {
     req.on('timeout', () => { req.destroy(); resolve(null); });
   });
 }
-
-// Numeric semver-ish comparison: handles "v0.3.0" or "0.3.0", missing parts
-// default to 0, anything unparseable also degrades to 0 so a malformed tag
-// can never be considered "newer" than the current version.
 function isNewerVersion(latest, current) {
   const parts = (s) => String(s).replace(/^v/i, '').split('.').map((n) => Number(n) || 0);
   const a = parts(latest), b = parts(current);
@@ -339,10 +380,71 @@ function isNewerVersion(latest, current) {
   return false;
 }
 
+// Whether in-place install is feasible on this build.
+// • Windows: always — NSIS auto-update works without code-signing.
+// • macOS: only when the .app is Developer ID-signed, otherwise Squirrel.Mac
+//   refuses to install. We can't introspect the signature easily from here,
+//   so we treat unsigned macOS as "browser download" and let the user grab
+//   the DMG themselves. Set FORCE_INPLACE_MAC=1 in env once you have signing.
+const canInstallInPlace = () => {
+  if (process.platform === 'win32') return true;
+  if (process.platform === 'darwin') return !!process.env.FORCE_INPLACE_MAC;
+  return false;
+};
+
 ipcMain.handle('updates:check', async () => {
-  const r = await fetchLatestRelease();
-  if (!r || !r.tag) return { available: false };
   const current = app.getVersion();
-  const latest = String(r.tag).replace(/^v/i, '');
-  return { available: isNewerVersion(latest, current), current, latest, url: r.url, name: r.name };
+
+  // macOS / unsigned → fall back to the old "open the release page" flow.
+  if (!canInstallInPlace()) {
+    const r = await fetchLatestRelease();
+    if (!r || !r.tag) return { available: false, current, mode: 'browser' };
+    const latest = String(r.tag).replace(/^v/i, '');
+    return {
+      available: isNewerVersion(latest, current),
+      current, latest, url: r.url, name: r.name, mode: 'browser',
+    };
+  }
+
+  // Windows in-place path → ask electron-updater.
+  if (!app.isPackaged) return { available: false, current, mode: 'inplace', dev: true };
+  try {
+    const r = await autoUpdater.checkForUpdates();
+    const info = r && r.updateInfo;
+    if (!info || !info.version) return { available: false, current, mode: 'inplace' };
+    const available = isNewerVersion(info.version, current);
+    return {
+      available,
+      current,
+      latest: info.version,
+      name: info.releaseName || ('v' + info.version),
+      notes: info.releaseNotes || '',
+      mode: 'inplace',
+    };
+  } catch (e) {
+    return { available: false, current, mode: 'inplace', error: String((e && e.message) || e) };
+  }
+});
+
+ipcMain.handle('updates:download', async () => {
+  if (!canInstallInPlace() || !app.isPackaged) return { ok: false, reason: 'not-supported' };
+  try { await autoUpdater.downloadUpdate(); return { ok: true }; }
+  catch (e) { return { ok: false, reason: String((e && e.message) || e) }; }
+});
+
+ipcMain.handle('updates:install', () => {
+  if (!canInstallInPlace() || !app.isPackaged) return { ok: false, reason: 'not-supported' };
+  // First arg: don't ignore "is silent" — let NSIS show its wizard so the user
+  // can click through (oneClick: false). Second arg: force-runAfterFinish so
+  // the app relaunches once the wizard completes.
+  setImmediate(() => autoUpdater.quitAndInstall(false, true));
+  return { ok: true };
+});
+
+// Kick off a non-blocking check ~4s after launch so it doesn't race the
+// renderer's first paint. The renderer is the source of truth for the UI;
+// this just primes the events.
+app.whenReady().then(() => {
+  if (!canInstallInPlace() || !app.isPackaged) return;
+  setTimeout(() => { autoUpdater.checkForUpdates().catch(() => {}); }, 4000);
 });

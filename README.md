@@ -194,9 +194,17 @@ falls back to plain JSON — Electron will log a warning in dev mode.
 
 ## 6. Releasing a new version
 
-The installed app polls **GitHub Releases** on launch and shows an in-app
-banner when a newer version exists (`app/update-banner.jsx` +
-`updates:check` IPC). A release is just a tagged build with the artifacts
+The installed app uses **electron-updater** against **GitHub Releases**.
+On launch (and when the user clicks the banner) it consults the
+`latest.yml` / `latest-mac.yml` manifest the release workflow uploads
+next to the installer, and — on Windows — downloads the new
+`Schoolwork-Setup-…exe` directly in the background. The user is shown
+a click-through banner with three states: *available* → *downloading*
+→ *restart to install* (the last one runs the NSIS wizard, then the
+app relaunches). On macOS the build is unsigned, so electron-updater
+falls back to opening the DMG in the browser via the same banner.
+See `app/update-banner.jsx` + the `updates:*` IPC in `main.js` and
+`preload.js`. A release is just a tagged build with the artifacts
 attached, produced by a GitHub Actions workflow:
 
 1. Bump `version` in `package.json` (e.g. `0.2.0` → `0.3.0`) and commit.
@@ -212,8 +220,12 @@ attached, produced by a GitHub Actions workflow:
    `windows-latest` runner and `Schoolwork-…dmg` (arm64 + x64) on a
    `macos-latest` runner in parallel, then attaches every artifact in
    `dist/` to a Release named after the tag.
-4. Each installed copy sees the new release on its next launch and prompts
-   the user to download — clicking opens the Release page in their browser.
+4. Each installed copy sees the new release on its next launch.
+   On Windows the banner downloads the installer in-app and asks the
+   user to restart to install (NSIS wizard with `oneClick: false`).
+   On macOS the banner opens the release page in the browser (until
+   a Developer ID signing cert is configured — set `FORCE_INPLACE_MAC=1`
+   in the env once it is, to switch macOS over to the in-place path).
 
 To build a release without CI, run `npm run build:win` on Windows or
 `npm run build:mac` on the Mac and upload the `dist/` artifacts to a new
