@@ -1,6 +1,6 @@
 # Privacy Policy — Schoolwork
 
-**Last updated: 26 May 2026**
+**Last updated: 04 June 2026**
 
 > **Important – not legal advice.** This document is a thorough, good-faith
 > privacy policy template tailored to how the Schoolwork application actually
@@ -25,8 +25,8 @@ the individual or organisation that compiled and gave you this build. If you are
 the Operator, insert your legal name, contact email, and (if applicable) ABN here
 before distributing:
 
-- **Operator:** _[Your legal name / entity]_
-- **Contact:** _[contact email]_
+- **Operator:** Isaak Simpson
+- **Contact:** isaak.simpson@gmail.com
 - **Jurisdiction:** Queensland, Australia
 
 ## 2. The short version

@@ -1,6 +1,6 @@
 # Terms and Conditions — Schoolwork
 
-**Last updated: 26 May 2026**
+**Last updated: 04 June 2026**
 
 > **Important – not legal advice.** This is a comprehensive terms template
 > tailored to the Schoolwork application. It is **not** legal advice and is
@@ -20,9 +20,12 @@ App, you agree to these Terms. If you do not agree, do not use the App.
 ## 1. The agreement
 
 These Terms form a binding agreement between you ("**you**", the "**User**") and
-the individual or organisation that compiled and distributed this build of the
-App (the "**Operator**", "**we**", "**us**"). The Operator should insert its legal
-name and contact details before distribution.
+the individual who compiled and distributed this build of the App (the
+"**Operator**", "**we**", "**us**"):
+
+- **Operator:** Isaak Simpson
+- **Contact:** isaak.simpson@gmail.com
+- **Jurisdiction:** Queensland, Australia
 
 ## 2. Licence
 
@@ -167,8 +170,8 @@ claim in another forum.
 - **No waiver.** Failure to enforce a provision is not a waiver of it.
 - **Assignment.** You may not assign these Terms without the Operator's consent;
   the Operator may assign them in connection with a transfer of the App.
-- **Contact.** Questions about these Terms: contact the Operator at the details
-  in Section 1.
+- **Contact.** Questions about these Terms: contact the Operator at
+  isaak.simpson@gmail.com (see Section 1 for full details).
 
 By using Schoolwork, you acknowledge that you have read, understood, and agree to
 these Terms and the Privacy Policy.
