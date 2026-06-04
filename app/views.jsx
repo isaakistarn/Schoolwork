@@ -490,8 +490,53 @@ const CalendarView = ({ pushToast }) => {
   const move = (dir) => setCursor(c => viewMode === "month" ? new Date(c.getFullYear(), c.getMonth() + dir, 1) : addDays(c, (viewMode === "day" ? 1 : 7) * dir));
   const goToday = () => setCursor(new Date());
 
-  const hours = Array.from({ length: 15 }, (_, i) => i + 7); // 7–21
+  const START_H = 7, END_H = 22, HOUR_H = 56;            // 56px per hour row
+  const hours = Array.from({ length: END_H - START_H }, (_, i) => i + START_H); // 7–21
+  const HOURS_COUNT = hours.length;
   const columns = viewMode === "day" ? [new Date(cursor)] : Array.from({ length: 7 }, (_, i) => addDays(mondayOf(cursor), i));
+
+  // Minutes from the top of the visible day (07:00). Used to position events
+  // by their actual start/end times instead of bucketing them into hour cells.
+  const minsFromStart = (t) => {
+    if (!t) return 0;
+    const [hh, mm] = String(t).split(":");
+    return (parseInt(hh, 10) - START_H) * 60 + (parseInt(mm || "0", 10) || 0);
+  };
+  const clampMins = (m) => Math.max(0, Math.min(HOURS_COUNT * 60, m));
+
+  // Lane allocation: cluster items that overlap in time, then divide width
+  // evenly across the lanes inside each cluster so simultaneous classes
+  // sit side-by-side instead of stacking on top of each other.
+  const layoutColumn = (items) => {
+    const span = (it) => {
+      const s = clampMins(minsFromStart(it.start));
+      const eRaw = it.end ? minsFromStart(it.end) : s + 25;     // due markers get a fixed 25min footprint for layout
+      const e = clampMins(Math.max(eRaw, s + 18));              // floor at ~18min so tiny events still get a clickable strip
+      return { s, e };
+    };
+    const sorted = items.map(it => ({ it, ...span(it) })).sort((a, b) => a.s - b.s || a.e - b.e);
+    const out = [];
+    let cluster = [], clusterEnd = -1;
+    const flush = () => {
+      if (!cluster.length) return;
+      const laneEnd = []; // lane index -> end minute of last item in that lane
+      cluster.forEach(x => {
+        let lane = laneEnd.findIndex(end => end <= x.s);
+        if (lane === -1) { lane = laneEnd.length; laneEnd.push(0); }
+        laneEnd[lane] = x.e; x.lane = lane;
+      });
+      const lanes = laneEnd.length;
+      cluster.forEach(x => out.push({ ...x, lanes }));
+      cluster = [];
+    };
+    sorted.forEach(x => {
+      if (x.s >= clusterEnd) flush();
+      cluster.push(x);
+      if (x.e > clusterEnd) clusterEnd = x.e;
+    });
+    flush();
+    return out;
+  };
 
   const rangeLabel = viewMode === "month"
     ? cursor.toLocaleDateString(undefined, { month: "long", year: "numeric" })
@@ -499,41 +544,65 @@ const CalendarView = ({ pushToast }) => {
       ? cursor.toLocaleDateString(undefined, { weekday: "long", day: "numeric", month: "long" })
       : (() => { const s = mondayOf(cursor), e = addDays(s, 6); return s.toLocaleDateString(undefined, { day: "numeric", month: "short" }) + " – " + e.toLocaleDateString(undefined, { day: "numeric", month: "short", year: "numeric" }); })();
 
-  const Block = ({ it }) => (
-    <div
-      className={"cal-event" + (it.kind === "due" ? " warning" : "")}
-      style={it.kind !== "due" ? { borderLeftColor: it.color, background: it.color + "1A", cursor: it.kind === "class" || it.kind === "event" ? "pointer" : "default" } : { cursor: "default" }}
-      onClick={(e) => { e.stopPropagation(); if (it.kind === "class") setEditor({ mode: "class", data: it.ref }); else if (it.kind === "event") setEditor({ mode: "event", data: it.ref }); }}
-      title={it.title}
-    >
-      <div style={{ fontWeight: 500, color: "var(--fg-primary)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{it.title}</div>
-      <div className="ev-time">{it.start}{it.end ? "–" + it.end : ""}{it.sub ? " · " + it.sub : ""}</div>
-    </div>
-  );
+  // Click on empty space in a day column → open the New event modal pre-filled
+  // with the time the user clicked on, snapped to the nearest 15 min.
+  const onColClick = (e, d) => {
+    const rect = e.currentTarget.getBoundingClientRect();
+    const y = e.clientY - rect.top;
+    const minsRaw = (y / HOUR_H) * 60;
+    const snapped = Math.max(0, Math.min((HOURS_COUNT - 1) * 60, Math.floor(minsRaw / 15) * 15));
+    const hh = START_H + Math.floor(snapped / 60);
+    const mm = snapped % 60;
+    setEditor({ mode: "event", data: { date: isoDate(d), start: pad2(hh) + ":" + pad2(mm), end: pad2(hh + 1) + ":" + pad2(mm) } });
+  };
 
   const renderHourGrid = () => (
-    <div className={"cal" + (viewMode === "day" ? " day" : "")} style={viewMode === "day" ? { gridTemplateColumns: "56px 1fr" } : undefined}>
-      <div className="cal-h" style={{ borderRight: "1px solid var(--bd-default)" }}></div>
+    <div className={"cal cal-precise" + (viewMode === "day" ? " day" : "")}
+         style={{ gridTemplateColumns: viewMode === "day" ? "56px 1fr" : "56px repeat(7, 1fr)" }}>
+      <div className="cal-h corner" />
       {columns.map((d, i) => (
         <div key={i} className={"cal-h" + (isoDate(d) === todayStr ? " today" : "")}>
           <div>{DOW[(d.getDay() + 6) % 7]}</div>
           <div className="dnum">{d.getDate()}</div>
         </div>
       ))}
-      {hours.map(h => (
-        <React.Fragment key={h}>
-          <div className="cal-time">{pad2(h)}:00</div>
-          {columns.map((d, di) => {
-            const items = itemsForDate(d).filter(it => hourOf(it.start) === h);
-            return (
-              <div className="cal-cell" key={di + ":" + h}
-                onClick={() => setEditor({ mode: "event", data: { date: isoDate(d), start: pad2(h) + ":00", end: pad2(h + 1) + ":00" } })}>
-                {items.map(it => <Block key={it.key} it={it} />)}
-              </div>
-            );
-          })}
-        </React.Fragment>
-      ))}
+
+      <div className="cal-gutter" style={{ height: HOURS_COUNT * HOUR_H }}>
+        {hours.map(h => <div key={h} className="cal-hour-label" style={{ height: HOUR_H }}>{pad2(h)}:00</div>)}
+      </div>
+
+      {columns.map((d, di) => {
+        const placed = layoutColumn(itemsForDate(d));
+        return (
+          <div key={di} className="cal-col" style={{ height: HOURS_COUNT * HOUR_H }} onClick={(e) => onColClick(e, d)}>
+            {hours.map(h => <div key={h} className="cal-row-line" style={{ top: (h - START_H + 1) * HOUR_H }} />)}
+            {placed.map(({ it, s, e, lane, lanes }) => {
+              const top = s * (HOUR_H / 60);
+              const height = it.end ? Math.max(20, (e - s) * (HOUR_H / 60) - 2) : 22;
+              const widthPct = 100 / lanes;
+              const leftPct = lane * widthPct;
+              return (
+                <div
+                  key={it.key}
+                  className={"cal-event abs" + (it.kind === "due" ? " warning" : "")}
+                  style={{
+                    top, height,
+                    left: `calc(${leftPct}% + 2px)`,
+                    width: `calc(${widthPct}% - 4px)`,
+                    ...(it.kind !== "due" ? { borderLeftColor: it.color, background: it.color + "1A" } : {}),
+                    cursor: it.kind === "class" || it.kind === "event" ? "pointer" : "default",
+                  }}
+                  onClick={(ev) => { ev.stopPropagation(); if (it.kind === "class") setEditor({ mode: "class", data: it.ref }); else if (it.kind === "event") setEditor({ mode: "event", data: it.ref }); }}
+                  title={it.title + " · " + it.start + (it.end ? "–" + it.end : "")}
+                >
+                  <div className="ev-title">{it.title}</div>
+                  <div className="ev-time">{it.start}{it.end ? "–" + it.end : ""}{it.sub ? " · " + it.sub : ""}</div>
+                </div>
+              );
+            })}
+          </div>
+        );
+      })}
     </div>
   );
 
@@ -1632,7 +1701,9 @@ const LibraryView = ({ pushToast }) => {
 /* -------------------- SETTINGS -------------------- */
 const SettingsView = ({ tweaks, setTweak, pushToast, onLogout }) => {
   const { useStore, Editable } = window.Store;
-  const { userName, setUserName, workspaceName, setWorkspaceName, courses, assignments, notes, library, usage, limits, terms, setTerms } = useStore();
+  const { userName, setUserName, workspaceName, setWorkspaceName, courses, assignments, notes, library, usage, limits, terms, setTerms, schedule, copyFromTerm } = useStore();
+  const [subjCopyFrom, setSubjCopyFrom] = useState("");
+  const [subjCopyReplace, setSubjCopyReplace] = useState(false);
   const { account, tier, isUnlimited, FREE_LIMITS, prefs, setPrefs } = window.Auth.useAuth();
   const { termState, termWeeks, termDatesLabel, SCHOOLS, termsForSchool } = window.SchoolworkData;
   const [tab, setTab] = useState("account");
@@ -1836,6 +1907,68 @@ const SettingsView = ({ tweaks, setTweak, pushToast, onLogout }) => {
           )}
 
           {tab === "subjects" && (
+            <>
+            <SettingsSection title="Copy from another term" subtitle="Bring across the subjects (and optionally the weekly schedule) from a different term so you don't have to re-enter them.">
+              {(() => {
+                const sources = (terms || []).filter(t => t.key !== workspaceName).map(t => {
+                  let cc = 0, sc = 0;
+                  try {
+                    for (let i = 0; i < localStorage.length; i++) {
+                      const k = localStorage.key(i);
+                      if (k && k.startsWith("schoolwork:data:") && k.endsWith(":" + t.key)) {
+                        const v = JSON.parse(localStorage.getItem(k) || "{}");
+                        cc = Math.max(cc, (v.courses  || []).length);
+                        sc = Math.max(sc, (v.schedule || []).length);
+                      }
+                    }
+                  } catch {}
+                  return { ...t, courseCount: cc, scheduleCount: sc };
+                });
+                const onCopy = (alsoSchedule) => {
+                  if (!subjCopyFrom) return;
+                  if (subjCopyReplace) {
+                    const pieces = [];
+                    if (courses.length)               pieces.push(courses.length  + " subject" + (courses.length  === 1 ? "" : "s"));
+                    if (alsoSchedule && schedule.length) pieces.push(schedule.length + " class"   + (schedule.length === 1 ? "" : "es"));
+                    if (pieces.length && !confirm("Replace " + pieces.join(" and ") + " in " + workspaceName + " with the ones from " + subjCopyFrom + "?")) return;
+                  }
+                  const r = copyFromTerm(subjCopyFrom, { includeCourses: true, includeSchedule: alsoSchedule, replace: subjCopyReplace });
+                  if (!r.ok) {
+                    pushToast?.({ tone: "warning", title: "Nothing to copy", body: r.reason === "empty" ? "That term has nothing saved." : "Pick a different term." });
+                    return;
+                  }
+                  const bits = [];
+                  if (r.addedSubjects) bits.push(r.addedSubjects + " subject" + (r.addedSubjects === 1 ? "" : "s"));
+                  if (r.addedClasses)  bits.push(r.addedClasses  + " class"   + (r.addedClasses  === 1 ? "" : "es"));
+                  pushToast?.({ tone: "success", title: "Copied from " + subjCopyFrom, body: (bits.join(" and ") || "Already up to date") + (bits.length ? " added" : "") });
+                  setSubjCopyFrom("");
+                };
+                return (
+                  <>
+                    <SettingsField label="Source term" hint="Which term to copy from. The counts show what each term has saved.">
+                      <select className="select" value={subjCopyFrom} onChange={(e) => setSubjCopyFrom(e.target.value)}>
+                        <option value="">Choose a term…</option>
+                        {sources.map(t => {
+                          const lbl = t.courseCount || t.scheduleCount
+                            ? " (" + (t.courseCount ? t.courseCount + " subj" : "") + (t.courseCount && t.scheduleCount ? ", " : "") + (t.scheduleCount ? t.scheduleCount + " class" + (t.scheduleCount === 1 ? "" : "es") : "") + ")"
+                            : " (empty)";
+                          return <option key={t.key} value={t.key}>{t.key}{lbl}</option>;
+                        })}
+                      </select>
+                    </SettingsField>
+                    <SettingsField label="Replace current" hint="Wipe this term's existing subjects (and classes when included) before copying.">
+                      <label style={{ display: "inline-flex", alignItems: "center", gap: 8, fontSize: 13 }}>
+                        <input type="checkbox" checked={subjCopyReplace} onChange={(e) => setSubjCopyReplace(e.target.checked)} /> Replace existing
+                      </label>
+                    </SettingsField>
+                    <div style={{ display: "flex", gap: 8, marginTop: 8, flexWrap: "wrap" }}>
+                      <button className="btn btn-secondary" disabled={!subjCopyFrom} onClick={() => onCopy(false)}><Icon name="export" size={14} /> Copy subjects only</button>
+                      <button className="btn btn-primary"   disabled={!subjCopyFrom} onClick={() => onCopy(true)}><Icon name="export" size={14} /> Copy subjects &amp; classes</button>
+                    </div>
+                  </>
+                );
+              })()}
+            </SettingsSection>
             <SettingsSection title="Subjects" subtitle="Enrolled subjects for this term. Edit names, codes, instructors or colour-coding.">
               <table className="data" style={{ marginTop: 8 }}>
                 <colgroup><col style={{ width: 32 }} /><col style={{ width: 140 }} /><col /><col style={{ width: 160 }} /><col style={{ width: 80 }} /></colgroup>
@@ -1854,6 +1987,7 @@ const SettingsView = ({ tweaks, setTweak, pushToast, onLogout }) => {
               </table>
               <p style={{ fontSize: 12, color: "var(--fg-tertiary)", marginTop: 12 }}>Turn on Edit mode in the top bar to change codes, titles, and teachers.</p>
             </SettingsSection>
+            </>
           )}
 
           {tab === "notifications" && (
@@ -2055,21 +2189,87 @@ const Onboarding = ({ pushToast, onNavigate }) => {
 const DAY_NAMES = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"];
 const WeeklyScheduleModal = ({ onClose, onEdit, pushToast }) => {
   const { useStore } = window.Store;
-  const { schedule, courseById, removeClass } = useStore();
+  const { schedule, courses, courseById, removeClass, terms, workspaceName, copyFromTerm } = useStore();
+  const [copyFrom, setCopyFrom] = useState("");
+  const [copyReplace, setCopyReplace] = useState(false);
+  const [copySubjects, setCopySubjects] = useState(true);
+  const [copyClasses, setCopyClasses] = useState(true);
   useEffect(() => {
     const h = (e) => { if (e.key === "Escape") onClose(); };
     window.addEventListener("keydown", h); return () => window.removeEventListener("keydown", h);
   }, [onClose]);
   const byDay = (d) => schedule.map((s, i) => ({ ...s, id: s.id || "i" + i })).filter(s => s.day === d).sort((a, b) => a.start.localeCompare(b.start));
 
+  // Source candidates: any term other than this one. For each, count both
+  // subjects and schedule rows in localStorage so the picker can label empties.
+  const sources = (terms || []).filter(t => t.key !== workspaceName).map(t => {
+    let courseCount = 0, scheduleCount = 0;
+    try {
+      for (let i = 0; i < localStorage.length; i++) {
+        const k = localStorage.key(i);
+        if (k && k.startsWith("schoolwork:data:") && k.endsWith(":" + t.key)) {
+          const v = JSON.parse(localStorage.getItem(k) || "{}");
+          courseCount  = Math.max(courseCount,  (v.courses  || []).length);
+          scheduleCount = Math.max(scheduleCount, (v.schedule || []).length);
+        }
+      }
+    } catch {}
+    return { ...t, courseCount, scheduleCount };
+  });
+  const onCopy = () => {
+    if (!copyFrom) return;
+    if (!copySubjects && !copyClasses) { pushToast?.({ tone: "warning", title: "Pick something to copy", body: "Tick Subjects, Classes, or both." }); return; }
+    if (copyReplace) {
+      const pieces = [];
+      if (copySubjects && courses.length)   pieces.push(courses.length  + " subject" + (courses.length  === 1 ? "" : "s"));
+      if (copyClasses  && schedule.length)  pieces.push(schedule.length + " class"   + (schedule.length === 1 ? "" : "es"));
+      if (pieces.length && !confirm("Replace " + pieces.join(" and ") + " in " + workspaceName + " with the ones from " + copyFrom + "?")) return;
+    }
+    const r = copyFromTerm(copyFrom, { includeCourses: copySubjects, includeSchedule: copyClasses, replace: copyReplace });
+    if (!r.ok) {
+      const reasonMsg = r.reason === "empty" ? "That term has no subjects or classes saved."
+                       : r.reason === "nothing-selected" ? "Tick Subjects, Classes, or both."
+                       : "Pick a different term.";
+      pushToast?.({ tone: "warning", title: "Nothing to copy", body: reasonMsg });
+      return;
+    }
+    const bits = [];
+    if (r.addedSubjects) bits.push(r.addedSubjects + " subject" + (r.addedSubjects === 1 ? "" : "s"));
+    if (r.addedClasses)  bits.push(r.addedClasses  + " class"   + (r.addedClasses  === 1 ? "" : "es"));
+    pushToast?.({ tone: "success", title: "Copied from " + copyFrom, body: (bits.join(" and ") || "Already up to date") + (bits.length ? " added" : "") });
+    setCopyFrom("");
+  };
+
   return (
     <div className="modal-overlay" onClick={onClose} role="dialog" aria-modal="true">
       <div className="modal" onClick={e => e.stopPropagation()} style={{ width: 560, maxHeight: "80vh", display: "flex", flexDirection: "column" }}>
         <div className="modal-h">
-          <div><h2>Weekly schedule</h2><div style={{ fontSize: 12, color: "var(--fg-tertiary)" }}>These class times repeat every week.</div></div>
+          <div><h2>Weekly schedule</h2><div style={{ fontSize: 12, color: "var(--fg-tertiary)" }}>These class times repeat every week — scoped to {workspaceName}.</div></div>
           <button className="iconbtn" onClick={onClose} aria-label="Close"><Icon name="close" /></button>
         </div>
         <div className="modal-b" style={{ overflowY: "auto" }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap", padding: "8px 0 12px", borderBottom: "1px solid var(--bd-subtle)", marginBottom: 10 }}>
+            <span style={{ fontSize: 12, color: "var(--fg-secondary)", marginRight: 4 }}>Copy from</span>
+            <select className="select" style={{ height: 30, minWidth: 220 }} value={copyFrom} onChange={(e) => setCopyFrom(e.target.value)}>
+              <option value="">Choose a term…</option>
+              {sources.map(t => {
+                const label = t.courseCount || t.scheduleCount
+                  ? " (" + (t.courseCount ? t.courseCount + " subj" : "") + (t.courseCount && t.scheduleCount ? ", " : "") + (t.scheduleCount ? t.scheduleCount + " class" + (t.scheduleCount === 1 ? "" : "es") : "") + ")"
+                  : " (empty)";
+                return <option key={t.key} value={t.key}>{t.key}{label}</option>;
+              })}
+            </select>
+            <label style={{ fontSize: 12, color: "var(--fg-secondary)", display: "inline-flex", alignItems: "center", gap: 6 }}>
+              <input type="checkbox" checked={copySubjects} onChange={(e) => setCopySubjects(e.target.checked)} /> Subjects
+            </label>
+            <label style={{ fontSize: 12, color: "var(--fg-secondary)", display: "inline-flex", alignItems: "center", gap: 6 }}>
+              <input type="checkbox" checked={copyClasses} onChange={(e) => setCopyClasses(e.target.checked)} /> Classes
+            </label>
+            <label style={{ fontSize: 12, color: "var(--fg-secondary)", display: "inline-flex", alignItems: "center", gap: 6 }} title="Clear this term's existing entries for the ticked slices before copying.">
+              <input type="checkbox" checked={copyReplace} onChange={(e) => setCopyReplace(e.target.checked)} /> Replace current
+            </label>
+            <button className="btn btn-secondary btn-sm" onClick={onCopy} disabled={!copyFrom || (!copySubjects && !copyClasses)}><Icon name="export" size={12} /> Copy</button>
+          </div>
           {DAY_NAMES.map((name, d) => (
             <div key={d} className="sched-day">
               <div className="sched-day-h">

@@ -441,12 +441,12 @@ function tint(hex, pct) {
   const m = -pct / 100; return rgbToHex(r * (1 - m), g * (1 - m), b * (1 - m));
 }
 
-// Pull any newer snapshot from the cloud-synced folder BEFORE React reads
-// localStorage, so the app mounts with this device's latest data; then arm the
-// auto-push that mirrors future changes back out. (No-ops in web-only mode.)
+// Passively check whether the shared folder has newer data than this device
+// has seen — the result is surfaced in Settings → Sync devices so the user
+// can choose to pull it. We deliberately do NOT auto-apply anything: edits
+// stay in localStorage on this device until the user clicks Push or Pull.
 (async () => {
-  try { await window.SyncBridge?.pullOnStartup?.(); }
-  catch (e) { console.warn("Schoolwork sync: startup pull failed", e); }
-  window.SyncBridge?.installAutoPush?.();
+  try { await window.SyncBridge?.checkOnStartup?.(); }
+  catch (e) { console.warn("Schoolwork sync: startup check failed", e); }
   ReactDOM.createRoot(document.getElementById("root")).render(<App />);
 })();

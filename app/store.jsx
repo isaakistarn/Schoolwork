@@ -210,6 +210,58 @@ const StoreProvider = ({ children }) => {
   const updateClass = useCallback((id, p) => setData(d => ({ ...d, schedule: d.schedule.map((r, i) => (r.id || "i" + i) === id ? { ...r, ...p } : r) })), []);
   const removeClass = useCallback((id) => setData(d => ({ ...d, schedule: d.schedule.filter((r, i) => (r.id || "i" + i) !== id) })), []);
 
+  /* ---------- copy subjects and/or the weekly schedule from another term ----------
+     Reads the source term's saved profile straight off localStorage (it
+     might not be the active one). Subjects matched by code (case-
+     insensitive) are merged with what's already here; the rest are
+     created. The weekly schedule is then rewritten through the resulting
+     id map so every copied class still points at a valid subject.
+
+     `includeCourses` / `includeSchedule` toggle which slice(s) come
+     across. `replace` clears the active term's existing entries for the
+     slices that are being copied. Either slice can legitimately be zero
+     (e.g. a source term with subjects but no classes set up yet); only
+     "both zero" is treated as nothing to do. */
+  const copyFromTerm = useCallback((sourceKey, { includeCourses = true, includeSchedule = true, replace = false } = {}) => {
+    if (!sourceKey || sourceKey === workspaceName) return { ok: false, reason: "same-term" };
+    if (!includeCourses && !includeSchedule) return { ok: false, reason: "nothing-selected" };
+    let src = null;
+    try { const v = localStorage.getItem(dataKey(sourceKey)); if (v) src = JSON.parse(v); } catch {}
+    const srcCourses = (src && src.courses) || [];
+    const srcSchedule = (src && src.schedule) || [];
+    if (!src || (!srcCourses.length && !srcSchedule.length)) return { ok: false, reason: "empty" };
+    let addedClasses = 0, addedSubjects = 0;
+    setData(d => {
+      const idMap = new Map();
+      let targetCourses = includeCourses && replace ? [] : [...d.courses];
+      // Always *consider* every source subject so we can re-link the schedule,
+      // even when the user only ticked Classes. When `includeCourses` is off
+      // we only register existing matches and skip the create step.
+      srcCourses.forEach(c => {
+        const match = targetCourses.find(tc => (tc.code || "").toLowerCase() === (c.code || "").toLowerCase());
+        if (match) { idMap.set(c.id, match.id); return; }
+        if (!includeCourses) return; // subject doesn't exist here and we're not bringing them across
+        const nid = (c.code || "C").slice(0, 3).toUpperCase() + "-" + Math.floor(Math.random() * 900 + 100);
+        targetCourses.push({ ...c, id: nid, term: workspaceName, grade: 0, completion: 0 });
+        idMap.set(c.id, nid);
+        addedSubjects += 1;
+      });
+
+      let nextSchedule = d.schedule;
+      if (includeSchedule) {
+        const copied = srcSchedule.map(s => ({
+          ...s,
+          id: uid("CL"),
+          course: idMap.get(s.course) || s.course,
+        }));
+        addedClasses = copied.length;
+        nextSchedule = replace ? copied : [...d.schedule, ...copied];
+      }
+      return { ...d, courses: targetCourses, schedule: nextSchedule };
+    });
+    return { ok: true, addedClasses, addedSubjects };
+  }, [workspaceName, accountId]);
+
   /* ---------- calendars ---------- */
   const addCalendar = useCallback((row = {}) => {
     let created = null;
@@ -267,7 +319,7 @@ const StoreProvider = ({ children }) => {
     updateCourse, addCourse, removeCourse,
     updateNote, addNote, removeNote,
     setAssignmentAttachments,
-    addClass, updateClass, removeClass,
+    addClass, updateClass, removeClass, copyFromTerm,
     addCalendar, updateCalendar, removeCalendar,
     addEvent, updateEvent, removeEvent,
     addLibraryFile, updateLibraryFile, removeLibraryFile,
