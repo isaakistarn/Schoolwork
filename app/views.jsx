@@ -2331,4 +2331,258 @@ const WeeklyScheduleModal = ({ onClose, onEdit, pushToast }) => {
   );
 };
 
-window.Views = { Dashboard, CoursesView, CalendarView, NotesView, GradesView, CourseDetail, Inspector, SettingsView, LibraryView, Onboarding };
+/* ============================================================
+   Total Grades — a cross-term gradebook.
+
+   Unlike GradesView (which only ever sees the active term's store),
+   this view reads EVERY term's saved profile straight off localStorage
+   — the same `schoolwork:data:<accountId>:<profileKey>` keys the store
+   persists to — and uses the live store slices for whichever term is
+   currently active (so unsaved edits are reflected too). It then keeps
+   only the QCE summative instruments (IA1, IA2, IA3, EA), regardless of
+   which year/term they belong to, and compiles them into one sheet with
+   averages, % complete and a per-instrument breakdown by subject.
+   ============================================================ */
+const letterGrade = (n) =>
+  n >= 93 ? "A" : n >= 90 ? "A−" : n >= 87 ? "B+" : n >= 83 ? "B" : n >= 80 ? "B−" :
+  n >= 77 ? "C+" : n >= 73 ? "C" : n >= 70 ? "C−" : n >= 60 ? "D" : "F";
+
+const TotalGradesView = () => {
+  const { useStore } = window.Store;
+  const store = useStore();
+  const { terms, workspaceName, assignments: liveAssignments, courses: liveCourses } = store;
+  const { account } = window.Auth.useAuth();
+  const accountId = account?.id || "anon";
+  const { isSummative, ASSESSMENT_KINDS, STATUS_LABEL, STATUS_BADGE } = window.SchoolworkData;
+  const { Badge } = window.UI;
+
+  // Pull every summative task from every term. The active term comes from the
+  // live store; all other terms are read from their persisted localStorage
+  // profile so nothing is missed just because it isn't the open workspace.
+  const rows = useMemo(() => {
+    const out = [];
+    (terms || []).forEach(t => {
+      let courses, assignments;
+      if (t.key === workspaceName) {
+        courses = liveCourses; assignments = liveAssignments;
+      } else {
+        try {
+          const v = localStorage.getItem("schoolwork:data:" + accountId + ":" + t.key);
+          const d = v ? JSON.parse(v) : null;
+          courses = (d && d.courses) || [];
+          assignments = (d && d.assignments) || [];
+        } catch { courses = []; assignments = []; }
+      }
+      (assignments || []).filter(isSummative).forEach(a => {
+        const c = (courses || []).find(x => x.id === a.course);
+        const pts = Number(a.points) || 0;
+        const graded = a.status === "graded" && a.earned != null && pts > 0;
+        out.push({
+          rid: t.key + ":" + a.id,
+          termKey: t.key, year: t.year || "", term: t.term || "",
+          title: a.title || "Untitled",
+          code: c?.code || "—", subject: c?.title || "Unknown subject", color: c?.color || "var(--accent)",
+          assessment: a.assessment, weight: Number(a.weight) || 0,
+          status: a.status || "not_started",
+          earned: a.earned, points: pts,
+          pct: graded ? (a.earned / pts) * 100 : null,
+          graded, due: a.due,
+        });
+      });
+    });
+    // Newest term first, then by instrument order (IA1→EA).
+    const order = (k) => ASSESSMENT_KINDS.indexOf(k);
+    out.sort((a, b) => b.termKey.localeCompare(a.termKey) || order(a.assessment) - order(b.assessment));
+    return out;
+  }, [terms, workspaceName, liveAssignments, liveCourses, accountId]);
+
+  // ---- headline figures ----
+  const gradedRows = rows.filter(r => r.graded);
+  const pct = (n, d) => (d > 0 ? (n / d) * 100 : null);
+  const weighted = (list) => {
+    const g = list.filter(r => r.graded);
+    const wsum = g.reduce((s, r) => s + (r.weight || 1), 0);
+    if (!wsum) return null;
+    return g.reduce((s, r) => s + r.pct * (r.weight || 1), 0) / wsum;
+  };
+  const overallNum = weighted(rows);
+  const overall = overallNum != null ? overallNum.toFixed(1) : "—";
+  const completeNum = pct(gradedRows.length, rows.length);
+  const pendingCount = rows.filter(r => r.status === "submitted" || r.status === "in_review").length;
+
+  // ---- group by subject code (across every term) ----
+  const bySubject = useMemo(() => {
+    const map = new Map();
+    rows.forEach(r => {
+      if (!map.has(r.code)) map.set(r.code, { code: r.code, subject: r.subject, color: r.color, items: [] });
+      map.get(r.code).items.push(r);
+    });
+    return [...map.values()].map(s => {
+      const cells = {};
+      ASSESSMENT_KINDS.forEach(k => {
+        const inst = s.items.filter(r => r.assessment === k && r.graded);
+        cells[k] = inst.length ? inst.reduce((a, r) => a + r.pct, 0) / inst.length : null;
+      });
+      const gradedN = s.items.filter(r => r.graded).length;
+      return { ...s, cells, grade: weighted(s.items), gradedN, total: s.items.length, complete: pct(gradedN, s.items.length) };
+    }).sort((a, b) => a.code.localeCompare(b.code));
+  }, [rows]);
+
+  const exportCsv = () => {
+    const head = ["term", "subject_code", "subject", "task", "assessment", "weight", "status", "earned", "points", "percent"];
+    const esc = (v) => '"' + String(v ?? "").replace(/"/g, '""') + '"';
+    const lines = rows.map(r => [
+      r.year + " " + r.term, r.code, r.subject, r.title, r.assessment, r.weight + "%",
+      STATUS_LABEL[r.status] || r.status, r.earned ?? "", r.points || "",
+      r.pct != null ? r.pct.toFixed(1) + "%" : "",
+    ].map(esc).join(","));
+    const blob = new Blob([head.join(",") + "\n" + lines.join("\n")], { type: "text/csv" });
+    const url = URL.createObjectURL(blob);
+    const el = document.createElement("a"); el.href = url; el.download = "total-grades.csv"; el.click();
+    URL.revokeObjectURL(url);
+  };
+
+  const cellPct = (v) => v == null
+    ? <span style={{ color: "var(--fg-tertiary)" }}>—</span>
+    : <span style={{ color: v >= 85 ? "var(--success)" : v >= 78 ? "var(--accent)" : "var(--warning)" }}><b>{v.toFixed(0)}</b></span>;
+
+  return (
+    <>
+      <div className="page-header">
+        <div>
+          <div className="breadcrumb">Workspace · All terms</div>
+          <h1>Total grades</h1>
+        </div>
+        <div className="actions">
+          <button className="btn btn-tertiary" onClick={exportCsv} disabled={!rows.length}>
+            <Icon name="export" size={14} /> Export compiled sheet
+          </button>
+        </div>
+      </div>
+
+      <div className="content">
+        <div className="dash-row">
+          <div className="stat">
+            <span className="stat-label">Overall average</span>
+            <span className="stat-value">{overall}{overall !== "—" && <span style={{ fontSize: 14, color: "var(--fg-tertiary)", fontWeight: 400 }}> %</span>}</span>
+            <span className="stat-delta">{overallNum != null ? "letter " + letterGrade(overallNum) + " · weighted by task" : "no graded summative work yet"}</span>
+          </div>
+          <div className="stat">
+            <span className="stat-label">% complete</span>
+            <span className="stat-value">{completeNum != null ? completeNum.toFixed(0) : "—"}{completeNum != null && <span style={{ fontSize: 14, color: "var(--fg-tertiary)", fontWeight: 400 }}> %</span>}</span>
+            <span className="stat-delta">{gradedRows.length} of {rows.length} summative graded</span>
+          </div>
+          <div className="stat">
+            <span className="stat-label">Summative tasks</span>
+            <span className="stat-value">{rows.length}</span>
+            <span className="stat-delta">IA1–IA3 &amp; EA · all terms</span>
+          </div>
+          <div className="stat">
+            <span className="stat-label">Pending grading</span>
+            <span className="stat-value">{pendingCount}</span>
+            <span className="stat-delta">submitted, awaiting marks</span>
+          </div>
+        </div>
+
+        <div className="panel" style={{ marginBottom: 16 }}>
+          <div className="panel-h">
+            <h2>By subject</h2>
+            <span className="panel-sub">Averaged across every term · IA &amp; EA only</span>
+          </div>
+          {bySubject.length === 0 ? (
+            <div className="panel-b"><p style={{ fontSize: 13, color: "var(--fg-tertiary)" }}>No summative tasks tagged yet. Tag assignments as IA1–IA3 or EA in any term and they'll be compiled here.</p></div>
+          ) : (
+          <table className="data">
+            <colgroup>
+              <col style={{ width: 110 }} /><col />
+              <col style={{ width: 64 }} /><col style={{ width: 64 }} /><col style={{ width: 64 }} /><col style={{ width: 64 }} />
+              <col style={{ width: 80 }} /><col style={{ width: 200 }} /><col style={{ width: 70 }} />
+            </colgroup>
+            <thead>
+              <tr>
+                <th>Code</th><th>Subject</th>
+                <th className="num">IA1</th><th className="num">IA2</th><th className="num">IA3</th><th className="num">EA</th>
+                <th className="num">Grade</th><th>Complete</th><th>Letter</th>
+              </tr>
+            </thead>
+            <tbody>
+              {bySubject.map(s => (
+                <tr key={s.code}>
+                  <td>
+                    <span style={{ display: "inline-flex", alignItems: "center", gap: 6, fontWeight: 500 }}>
+                      <span className="dot" style={{ background: s.color }} /> {s.code}
+                    </span>
+                  </td>
+                  <td>{s.subject}</td>
+                  <td className="num">{cellPct(s.cells.IA1)}</td>
+                  <td className="num">{cellPct(s.cells.IA2)}</td>
+                  <td className="num">{cellPct(s.cells.IA3)}</td>
+                  <td className="num">{cellPct(s.cells.EA)}</td>
+                  <td className="num"><b>{s.grade != null ? s.grade.toFixed(1) : "—"}</b></td>
+                  <td>
+                    <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                      <div style={{ flex: 1, display: "flex", height: 8, borderRadius: 4, overflow: "hidden", background: "var(--bg-app)" }}>
+                        <span style={{ flex: s.complete || 0, background: "var(--accent)" }} />
+                        <span style={{ flex: 100 - (s.complete || 0) }} />
+                      </div>
+                      <span style={{ fontSize: 11, color: "var(--fg-tertiary)", minWidth: 52 }}>{s.gradedN}/{s.total}</span>
+                    </div>
+                  </td>
+                  <td>{s.grade != null ? <Badge tone={s.grade >= 85 ? "success" : s.grade >= 78 ? "accent" : "warning"}>{letterGrade(s.grade)}</Badge> : <span style={{ color: "var(--fg-tertiary)" }}>—</span>}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+          )}
+        </div>
+
+        <div className="panel">
+          <div className="panel-h">
+            <h2>All summative tasks</h2>
+            <span className="panel-sub">{rows.length} item{rows.length === 1 ? "" : "s"} across all terms</span>
+          </div>
+          {rows.length === 0 ? (
+            <div className="panel-b"><p style={{ fontSize: 13, color: "var(--fg-tertiary)" }}>Nothing to compile yet.</p></div>
+          ) : (
+          <table className="data">
+            <colgroup>
+              <col style={{ width: 150 }} /><col style={{ width: 100 }} /><col />
+              <col style={{ width: 90 }} /><col style={{ width: 70 }} /><col style={{ width: 120 }} />
+              <col style={{ width: 90 }} /><col style={{ width: 70 }} />
+            </colgroup>
+            <thead>
+              <tr>
+                <th>Term</th><th>Subject</th><th>Task</th>
+                <th>Assessment</th><th className="num">Weight</th><th>Status</th>
+                <th className="num">Score</th><th className="num">%</th>
+              </tr>
+            </thead>
+            <tbody>
+              {rows.map(r => (
+                <tr key={r.rid}>
+                  <td className="muted">{r.year}{r.term ? " · " + r.term : ""}</td>
+                  <td>
+                    <span style={{ display: "inline-flex", alignItems: "center", gap: 6, fontSize: 12 }}>
+                      <span className="dot" style={{ background: r.color }} /> {r.code}
+                    </span>
+                  </td>
+                  <td>{r.title}</td>
+                  <td><Badge tone="accent">{r.assessment}</Badge></td>
+                  <td className="num muted">{r.weight}%</td>
+                  <td><Badge tone={STATUS_BADGE[r.status] || "neutral"}>{STATUS_LABEL[r.status] || r.status}</Badge></td>
+                  <td className="num">{r.earned != null ? <><b>{r.earned}</b>/{r.points}</> : <span style={{ color: "var(--fg-tertiary)" }}>—</span>}</td>
+                  <td className="num" style={{ color: r.pct == null ? "var(--fg-tertiary)" : r.pct >= 90 ? "var(--success)" : r.pct >= 80 ? "var(--accent)" : "var(--warning)" }}>
+                    {r.pct != null ? <b>{r.pct.toFixed(0)}%</b> : "—"}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+          )}
+        </div>
+      </div>
+    </>
+  );
+};
+
+window.Views = { Dashboard, CoursesView, CalendarView, NotesView, GradesView, TotalGradesView, CourseDetail, Inspector, SettingsView, LibraryView, Onboarding };

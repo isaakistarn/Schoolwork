@@ -225,6 +225,7 @@ const NAV_PRIMARY = [
   { id: "calendar",    label: "Calendar",    icon: "calendar" },
   { id: "notes",       label: "Notes",       icon: "notes", count: "notes" },
   { id: "grades",      label: "Grades",      icon: "grades" },
+  { id: "totals",      label: "Total grades", icon: "totals" },
   { id: "courses",     label: "Subjects",    icon: "courses" },
 ];
 const NAV_LIBRARY = [

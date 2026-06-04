@@ -18,6 +18,7 @@ const Icon = ({ name, size = 16, className = "", strokeWidth = 1.6 }) => {
     case "calendar":     return <svg {...props}><rect x="3.5" y="5" width="17" height="15" rx="1.5" /><path d="M8 3v4M16 3v4M3.5 10h17" /></svg>;
     case "notes":        return <svg {...props}><path d="M5 4h10l4 4v12H5z" /><path d="M15 4v4h4" /><path d="M8 13h8M8 17h5" /></svg>;
     case "grades":       return <svg {...props}><path d="M4 20V4M4 20h16" /><path d="M8 16v-4M12 16V8M16 16v-6" /></svg>;
+    case "totals":       return <svg {...props}><path d="M4 20V4M4 20h16" /><path d="M8 16v-4M12 16V8M16 16v-6" /><path d="M3 12h18" strokeDasharray="2 2" /></svg>;
     case "library":      return <svg {...props}><path d="M5 4v16M9 4v16M13 4l5 16" /></svg>;
     case "archive":      return <svg {...props}><rect x="3" y="5" width="18" height="4" rx="1" /><path d="M5 9v10h14V9" /><path d="M10 13h4" /></svg>;
     case "search":       return <svg {...props}><circle cx="11" cy="11" r="6" /><path d="m20 20-3.5-3.5" /></svg>;

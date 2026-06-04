@@ -2,7 +2,7 @@
 
 const { useState, useEffect, useMemo, useCallback } = React;
 const { AppBar, Sidebar, StatusBar } = window.Chrome;
-const { Dashboard, CoursesView, CalendarView, NotesView, GradesView, CourseDetail, Inspector, LibraryView } = window.Views;
+const { Dashboard, CoursesView, CalendarView, NotesView, GradesView, TotalGradesView, CourseDetail, Inspector, LibraryView } = window.Views;
 const AssignmentsView = window.AssignmentsView;
 
 /* ============================================================
@@ -345,6 +345,7 @@ const AppInner = ({ tweaks, setTweak }) => {
     if (active === "calendar")    return <CalendarView pushToast={pushToast} />;
     if (active === "notes")       return <NotesView pushToast={pushToast} />;
     if (active === "grades")      return <GradesView />;
+    if (active === "totals")      return <TotalGradesView />;
     if (active === "courses")     return <CoursesView onNavigate={setActive} pushToast={pushToast} />;
     if (active === "resources")   return <LibraryView pushToast={pushToast} />;
     if (active === "settings")    return <window.Views.SettingsView tweaks={tweaks} setTweak={setTweak} pushToast={pushToast} onLogout={logout} />;
