@@ -492,8 +492,8 @@ const CalendarView = ({ pushToast }) => {
   const move = (dir) => setCursor(c => viewMode === "month" ? new Date(c.getFullYear(), c.getMonth() + dir, 1) : addDays(c, (viewMode === "day" ? 1 : 7) * dir));
   const goToday = () => setCursor(new Date());
 
-  const START_H = 7, END_H = 22, HOUR_H = 56;            // 56px per hour row
-  const hours = Array.from({ length: END_H - START_H }, (_, i) => i + START_H); // 7–21
+  const START_H = 5, END_H = 23, HOUR_H = 56;            // 56px per hour row, 24h labels
+  const hours = Array.from({ length: END_H - START_H }, (_, i) => i + START_H); // 5–22
   const HOURS_COUNT = hours.length;
   const columns = viewMode === "day" ? [new Date(cursor)] : Array.from({ length: 7 }, (_, i) => addDays(mondayOf(cursor), i));
 
@@ -1165,13 +1165,49 @@ const GradesView = () => {
 };
 
 /* -------------------- COURSE DETAIL -------------------- */
-const CourseDetail = ({ courseId, onOpen, onNew, onNavigate, pushToast }) => {
+/* One self-contained, auto-saving note card used on the Subject page. */
+const CourseNoteCard = ({ note, updateNote, removeNote, setDirty, pushToast }) => {
+  const { Editable } = window.Store;
+  const initial = typeof note.body === "string" ? note.body : (note.body || []).join("\n\n");
+  const [draft, setDraft] = useState(initial);
+  const [saved, setSaved] = useState(true);
+  const timer = useRef(null);
+  useEffect(() => { setDraft(typeof note.body === "string" ? note.body : (note.body || []).join("\n\n")); setSaved(true); }, [note.id]);
+  const onChange = (v) => {
+    setDraft(v); setSaved(false); setDirty?.(true);
+    if (timer.current) clearTimeout(timer.current);
+    timer.current = setTimeout(() => { updateNote(note.id, { body: v }); setSaved(true); setDirty?.(false); }, 900);
+  };
+  return (
+    <div className="panel" style={{ marginBottom: 12 }}>
+      <div className="panel-h">
+        <h2 style={{ fontSize: 14 }}><Editable value={note.title} onChange={(v) => updateNote(note.id, { title: v })} /></h2>
+        <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+          <span className="panel-sub">{saved ? "Saved" : "Saving…"}</span>
+          <button className="iconbtn" style={{ width: 24, height: 24 }} aria-label="Delete note"
+            onClick={() => { if (confirm("Delete this note?")) { removeNote(note.id); pushToast?.({ tone: "warning", title: "Note deleted" }); } }}>
+            <Icon name="trash" size={13} />
+          </button>
+        </div>
+      </div>
+      <textarea
+        style={{ width: "100%", minHeight: 120, border: "none", borderTop: "1px solid var(--bd-default)", resize: "vertical", padding: "10px 14px", background: "transparent", color: "var(--fg-primary)", font: "inherit", lineHeight: 1.55, outline: "none", boxSizing: "border-box" }}
+        value={draft} onChange={(e) => onChange(e.target.value)} placeholder="Write your notes for this subject…" />
+    </div>
+  );
+};
+
+const CourseDetail = ({ courseId, onNavigate, pushToast }) => {
   const { useStore, Editable } = window.Store;
-  const { courseById, assignments: ASSIGNMENTS, updateCourse, removeCourse } = useStore();
-  const { fmt, StatusBadge, Priority, Progress, Badge } = window.UI;
-  const { classGrade } = window.SchoolworkData;
+  const { courseById, updateCourse, removeCourse, setDirty,
+          notes: NOTES, addNote, updateNote, removeNote,
+          library, addLibraryFile, removeLibraryFile } = useStore();
   const c = courseById(courseId);
-  const items = c ? ASSIGNMENTS.filter(a => a.course === courseId) : [];
+
+  const [preview, setPreview] = useState(null);
+  const [folderView, setFolderView] = useState(null);
+  const [driveOpen, setDriveOpen] = useState(false);
+  const fileRef = useRef(null);
 
   if (!c) {
     return (
@@ -1182,11 +1218,44 @@ const CourseDetail = ({ courseId, onOpen, onNew, onNavigate, pushToast }) => {
     );
   }
 
+  const courseNotes = NOTES.filter(n => n.course === courseId);
+  const courseFiles = library.filter(f => f.course === courseId);
+
+  const onPick = (e) => {
+    const files = Array.from(e.target.files || []);
+    files.forEach(f => {
+      const isText = LIB_TEXT_EXT.includes(extOf(f.name));
+      const reader = new FileReader();
+      reader.onload = () => {
+        const tooBig = f.size > 1.5 * 1048576;
+        addLibraryFile({
+          name: f.name, kind: kindOf(f.name), size: humanSize(f.size), course: courseId,
+          body: isText ? String(reader.result) : undefined,
+          dataUrl: !isText && !tooBig ? String(reader.result) : undefined,
+          summary: tooBig ? "File stored by reference (too large to embed). Keep the original on disk." : undefined,
+        });
+      };
+      if (isText) reader.readAsText(f); else reader.readAsDataURL(f);
+    });
+    if (files.length) pushToast?.({ tone: "success", title: files.length + " file" + (files.length === 1 ? "" : "s") + " added" });
+    e.target.value = "";
+  };
+
+  const download = (f) => {
+    let url, revoke = false;
+    if (f.dataUrl) url = f.dataUrl;
+    else { const blob = new Blob([f.body || f.summary || ""], { type: "text/plain" }); url = URL.createObjectURL(blob); revoke = true; }
+    const a = document.createElement("a"); a.href = url; a.download = f.name; a.click();
+    if (revoke) URL.revokeObjectURL(url);
+  };
+
+  const KindPill = ({ kind }) => <span className={"wa-file-icon " + kind} style={{ width: 34, height: 34, fontSize: 10 }}>{({pdf:"PDF",doc:"DOC",sheet:"XLS",image:"IMG",md:"MD",code:"PY"})[kind] || "FILE"}</span>;
+
   return (
     <>
       <div className="page-header">
         <div>
-          <div className="breadcrumb">Courses · {c.term}</div>
+          <div className="breadcrumb">Subjects · {c.term}</div>
           <h1>
             <span className="dot" style={{ background: c.color, marginRight: 8, width: 10, height: 10, display: "inline-block" }} />
             <Editable value={c.code} onChange={(v) => updateCourse(c.id, { code: v })} /> — <Editable value={c.title} onChange={(v) => updateCourse(c.id, { title: v })} />
@@ -1195,79 +1264,120 @@ const CourseDetail = ({ courseId, onOpen, onNew, onNavigate, pushToast }) => {
         <div className="actions">
           <button className="btn btn-tertiary"><Editable value={c.instructor} onChange={(v) => updateCourse(c.id, { instructor: v })} /></button>
           <button className="btn btn-secondary" style={{ color: "var(--error)" }} onClick={() => { if (confirm("Remove " + c.code + " and all its assignments & notes from this term?")) { removeCourse(c.id); pushToast?.({ tone: "warning", title: "Subject removed" }); onNavigate?.("courses"); } }}><Icon name="trash" size={14} /> Remove</button>
-          <button className="btn btn-primary" onClick={onNew}><Icon name="plus" size={14} /> Add assignment</button>
         </div>
       </div>
 
       <div className="content">
-        {(() => {
-          const gradedItems = items.filter(a => a.status === "graded" && a.earned != null && a.points);
-          const summativeCount = items.filter(a => window.SchoolworkData.isSummative(a) && a.earned != null && a.points).length;
-          const gradeNum = classGrade(items);
-          const doneCount = items.filter(a => a.status === "graded" || a.status === "submitted").length;
-          const completion = items.length ? Math.round((doneCount / items.length) * 100) : 0;
-          return (
-            <div className="dash-row">
-              <div className="stat">
-                <span className="stat-label">Current grade</span>
-                <span className="stat-value">{gradeNum != null ? gradeNum.toFixed(1) + "%" : "—"}</span>
-                <span className="stat-delta">{summativeCount ? summativeCount + " of 4 summative marked" : gradedItems.length + " graded"}</span>
-              </div>
-              <div className="stat">
-                <span className="stat-label">Completion</span>
-                <span className="stat-value">{completion}%</span>
-                <Progress value={completion} />
-              </div>
-              <div className="stat">
-                <span className="stat-label">Open items</span>
-                <span className="stat-value">{items.filter(a => a.status !== "graded" && a.status !== "submitted").length}</span>
-                <span className="stat-delta">{items.length} total</span>
-              </div>
-              <div className="stat">
-                <span className="stat-label">Credits</span>
-                <span className="stat-value">{c.credits || "—"}</span>
-                <span className="stat-delta">{c.room || "no room set"}</span>
+        {/* ---------------- Notes ---------------- */}
+        <div className="panel-h" style={{ background: "transparent", border: "none", padding: "0 0 8px" }}>
+          <h2>Notes</h2>
+          <button className="btn btn-secondary btn-sm" onClick={() => { const n = addNote({ course: courseId, title: "New note" }); if (n) pushToast?.({ tone: "success", title: "Note added" }); }}><Icon name="plus" size={14} /> New note</button>
+        </div>
+        {courseNotes.length === 0 ? (
+          <div className="empty" style={{ background: "var(--bg-surface)", border: "1px solid var(--bd-default)", borderRadius: 6, padding: "var(--s-8)", marginBottom: 18 }}>
+            <div className="empty-icon"><Icon name="notes" /></div>
+            <h3>No notes for {c.code} yet</h3>
+            <p>Capture lecture summaries, essay scaffolds, and revision points for this subject.</p>
+            <button className="btn btn-primary" style={{ marginTop: 10 }} onClick={() => addNote({ course: courseId, title: "New note" })}><Icon name="plus" size={14} /> Add a note</button>
+          </div>
+        ) : (
+          <div style={{ marginBottom: 18 }}>
+            {courseNotes.map(n => <CourseNoteCard key={n.id} note={n} updateNote={updateNote} removeNote={removeNote} setDirty={setDirty} pushToast={pushToast} />)}
+          </div>
+        )}
+
+        {/* ---------------- Library ---------------- */}
+        <div className="panel-h" style={{ background: "transparent", border: "none", padding: "0 0 8px" }}>
+          <h2>Library</h2>
+          <div style={{ display: "flex", gap: 6 }}>
+            <button className="btn btn-secondary btn-sm" onClick={() => setDriveOpen(true)}><Icon name="library" size={14} /> Add from Google Drive</button>
+            <button className="btn btn-primary btn-sm" onClick={() => fileRef.current?.click()}><Icon name="plus" size={14} /> Upload</button>
+            <input ref={fileRef} type="file" multiple style={{ display: "none" }} onChange={onPick} />
+          </div>
+        </div>
+        {courseFiles.length === 0 ? (
+          <div className="empty" style={{ background: "var(--bg-surface)", border: "1px solid var(--bd-default)", borderRadius: 6, padding: "var(--s-8)" }}>
+            <div className="empty-icon"><Icon name="library" /></div>
+            <h3>No files for this subject</h3>
+            <p>Upload syllabuses, past papers and rubrics, or import them straight from Google Drive.</p>
+          </div>
+        ) : (
+          <div className="lib-grid">
+            {courseFiles.map(f => {
+              const isFolder = f.kind === "folder";
+              return (
+                <div className="lib-card" key={f.id} onClick={() => isFolder ? setFolderView(f) : setPreview(f)}>
+                  <div className="lib-card-top">
+                    {isFolder
+                      ? <span className="wa-file-icon" style={{ width: 34, height: 34, display: "inline-flex", alignItems: "center", justifyContent: "center", background: "var(--accent-soft)", color: "var(--accent)", borderRadius: 6 }}><Icon name="archive" size={17} /></span>
+                      : <KindPill kind={f.kind} />}
+                    <button className="iconbtn" style={{ width: 24, height: 24 }} aria-label={isFolder ? "Remove folder" : "Delete file"}
+                      onClick={(e) => { e.stopPropagation(); if (confirm((isFolder ? "Remove folder “" : "Delete “") + f.name + "”?")) { removeLibraryFile(f.id); pushToast?.({ tone: "warning", title: isFolder ? "Folder removed" : "File deleted" }); } }}>
+                      <Icon name="trash" size={13} />
+                    </button>
+                  </div>
+                  <div className="lib-name" title={f.name}>{f.name}</div>
+                  <div className="lib-meta">{isFolder ? "Google Drive folder" : <>{f.size} · {new Date(f.modified).toLocaleDateString(undefined, { day: "numeric", month: "short" })}</>}</div>
+                </div>
+              );
+            })}
+          </div>
+        )}
+      </div>
+
+      {preview && (
+        <div className="modal-overlay" onClick={() => setPreview(null)} role="dialog" aria-modal="true">
+          <div className="workarea-modal" onClick={e => e.stopPropagation()}>
+            <div className="workarea-h">
+              <div className="wa-title"><h2>{preview.name}</h2><div className="wa-sub">{preview.size} · {preview.owner}</div></div>
+              <div style={{ display: "flex", gap: 6 }}>
+                <button className="btn btn-secondary" onClick={() => download(preview)}><Icon name="download" size={14} /> Download</button>
+                <button className="btn btn-tertiary" style={{ color: "var(--error)" }} onClick={() => { if (confirm("Delete this file?")) { removeLibraryFile(preview.id); setPreview(null); pushToast?.({ tone: "warning", title: "File deleted" }); } }}><Icon name="trash" size={14} /></button>
+                <button className="iconbtn" onClick={() => setPreview(null)} aria-label="Close"><Icon name="close" /></button>
               </div>
             </div>
-          );
-        })()}
-
-        <div className="panel">
-          <div className="panel-h"><h2>All assignments</h2><span className="panel-sub">{items.length} items</span></div>
-          <table className="data">
-            <thead>
-              <tr>
-                <th>Assignment</th>
-                <th>Type</th>
-                <th>Assessment</th>
-                <th>Due</th>
-                <th>Status</th>
-                <th>Priority</th>
-                <th className="num">Weight</th>
-                <th className="num">Score</th>
-              </tr>
-            </thead>
-            <tbody>
-              {items.map(a => (
-                <tr key={a.id} onClick={() => onOpen(a.id)}>
-                  <td>{a.title}</td>
-                  <td className="muted">{a.type}</td>
-                  <td>{a.assessment ? <Badge tone="accent">{a.assessment}</Badge> : <span style={{ color: "var(--fg-tertiary)" }}>—</span>}</td>
-                  <td>{fmt.dateLong(a.due)}</td>
-                  <td><StatusBadge status={a.status} /></td>
-                  <td><Priority level={a.priority} /></td>
-                  <td className="num muted">{a.weight}%</td>
-                  <td className="num">
-                    {a.earned != null
-                      ? <span><b>{a.earned}</b>/{a.points}</span>
-                      : <span style={{ color: "var(--fg-tertiary)" }}>—/{a.points}</span>}
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
+            <div className="wa-preview-body" style={{ display: "flex" }}>
+              <LibraryFilePreview file={preview} />
+            </div>
+          </div>
         </div>
-      </div>
+      )}
+
+      {folderView && (
+        <div className="modal-overlay" onClick={() => setFolderView(null)} role="dialog" aria-modal="true">
+          <div className="workarea-modal" onClick={e => e.stopPropagation()}>
+            <div className="workarea-h">
+              <div className="wa-title"><h2>{folderView.name}</h2><div className="wa-sub">Google Drive folder · browse subfolders &amp; files</div></div>
+              <div style={{ display: "flex", gap: 6 }}>
+                {folderView.link && <button className="btn btn-secondary" onClick={() => (window.schoolworkAPI?.openExternal ? window.schoolworkAPI.openExternal(folderView.link) : window.open(folderView.link, "_blank"))}><Icon name="link" size={14} /> Open in Drive</button>}
+                <button className="btn btn-tertiary" style={{ color: "var(--error)" }} onClick={() => { if (confirm("Remove this folder from this subject?")) { removeLibraryFile(folderView.id); setFolderView(null); pushToast?.({ tone: "warning", title: "Folder removed" }); } }}><Icon name="trash" size={14} /></button>
+                <button className="iconbtn" onClick={() => setFolderView(null)} aria-label="Close"><Icon name="close" /></button>
+              </div>
+            </div>
+            <div className="wa-preview-body" style={{ display: "block", padding: 16, overflow: "auto" }}>
+              {window.GoogleConnector?.DriveBrowser
+                ? <window.GoogleConnector.DriveBrowser key={folderView.driveId} root={{ id: folderView.driveId, name: folderView.name }} courseId={courseId} pushToast={pushToast} />
+                : <div className="empty"><p>The Drive browser isn't available in this build.</p></div>}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {driveOpen && (
+        <div className="modal-overlay" onClick={() => setDriveOpen(false)} role="dialog" aria-modal="true">
+          <div className="workarea-modal" onClick={e => e.stopPropagation()}>
+            <div className="workarea-h">
+              <div className="wa-title"><h2>Add to {c.code} from Google Drive</h2><div className="wa-sub">Imported files attach to this subject's library</div></div>
+              <button className="iconbtn" onClick={() => setDriveOpen(false)} aria-label="Close"><Icon name="close" /></button>
+            </div>
+            <div className="wa-preview-body" style={{ display: "block", padding: 16, overflow: "auto" }}>
+              {window.GoogleConnector?.DriveBrowser
+                ? <window.GoogleConnector.DriveBrowser courseId={courseId} pushToast={pushToast} />
+                : <div className="empty"><p>The Drive browser isn't available in this build.</p></div>}
+            </div>
+          </div>
+        </div>
+      )}
     </>
   );
 };

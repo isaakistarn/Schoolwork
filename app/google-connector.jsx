@@ -380,9 +380,12 @@ const GoogleConnector = (() => {
 
   // Reusable Drive browser — used both in Settings and inside the Library
   // (rooted at a saved folder). Folders and files can be opened/imported.
-  const DriveBrowser = ({ root, pushToast }) => {
+  const DriveBrowser = ({ root, pushToast, courseId }) => {
     const { useStore } = window.Store;
-    const { addLibraryFile } = useStore();
+    const { addLibraryFile: addLibraryFileRaw } = useStore();
+    // When opened from a Subject page, tag every import with that course so it
+    // lands in the subject's library rather than the general term library.
+    const addLibraryFile = (file) => addLibraryFileRaw(courseId ? { ...file, course: courseId } : file);
     const { account } = window.Auth.useAuth();
     const startRoot = root || { id: 'root', name: 'My Drive' };
 

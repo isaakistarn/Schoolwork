@@ -296,7 +296,7 @@ const AppInner = ({ tweaks, setTweak }) => {
   const navigate = (id) => {
     if (!guardLeave()) return;
     setActive(id);
-    if (id !== "assignments" && !id.startsWith("course:")) setInspectorOpen(false); else setInspectorOpen(true);
+    setInspectorOpen(id === "assignments");
   };
 
   // Keyboard shortcuts
@@ -321,7 +321,7 @@ const AppInner = ({ tweaks, setTweak }) => {
     if (!store.assignments.find(a => a.id === openId)) setOpenId(store.assignments[0]?.id || null);
   }, [workspaceName, store.assignments.length]);
 
-  const onOpenAssignment = (id) => { setOpenId(id); setInspectorOpen(true); setActive(a => a.startsWith("course:") ? a : "assignments"); };
+  const onOpenAssignment = (id) => { setOpenId(id); setInspectorOpen(true); setActive("assignments"); };
   const onOpenWorkArea = (assignmentId, fileId) => { setOpenId(assignmentId); setWorkArea({ assignmentId, fileId }); };
   const onDeleteAssignment = (id) => {
     const a = store.assignments.find(x => x.id === id);
@@ -365,12 +365,12 @@ const AppInner = ({ tweaks, setTweak }) => {
     }
     if (active.startsWith("course:")) {
       const cid = active.slice("course:".length);
-      return <CourseDetail courseId={cid} onOpen={onOpenAssignment} onNew={() => setQuickAddOpen(true)} pushToast={pushToast} onNavigate={setActive} />;
+      return <CourseDetail courseId={cid} pushToast={pushToast} onNavigate={setActive} />;
     }
     return null;
   };
 
-  const showInspector = inspectorOpen && tweaks.showInspector && (active === "assignments" || active.startsWith("course:"));
+  const showInspector = inspectorOpen && tweaks.showInspector && active === "assignments";
   const syncTime = new Date().toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit", hour12: true });
 
   return (

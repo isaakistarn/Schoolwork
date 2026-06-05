@@ -294,7 +294,7 @@ const StoreProvider = ({ children }) => {
     let created = null;
     setData(d => {
       if (!checkLimit("library", d.library.length)) return d;
-      created = { id: uid("L"), name: file.name || "Untitled", kind: file.kind || "doc", size: file.size || "—", modified: new Date().toISOString(), owner: account?.name || "Me", tags: file.tags || [], body: file.body, dataUrl: file.dataUrl, summary: file.summary, link: file.link, driveId: file.driveId };
+      created = { id: uid("L"), name: file.name || "Untitled", kind: file.kind || "doc", size: file.size || "—", modified: new Date().toISOString(), owner: account?.name || "Me", tags: file.tags || [], body: file.body, dataUrl: file.dataUrl, summary: file.summary, link: file.link, driveId: file.driveId, course: file.course || null };
       return { ...d, library: [created, ...d.library] };
     });
     return created;
