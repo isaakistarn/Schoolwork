@@ -49,6 +49,8 @@ const Icon = ({ name, size = 16, className = "", strokeWidth = 1.6 }) => {
     case "download":     return <svg {...props}><path d="M12 4v11" /><path d="m7 11 5 5 5-5" /><path d="M4 20h16" /></svg>;
     case "export":       return <svg {...props}><path d="M12 16V4" /><path d="m7 9 5-5 5 5" /><path d="M4 20h16" /></svg>;
     case "link":         return <svg {...props}><path d="M10 14a4 4 0 0 1 0-6l3-3a4 4 0 0 1 6 6l-1.5 1.5" /><path d="M14 10a4 4 0 0 1 0 6l-3 3a4 4 0 0 1-6-6L6.5 11.5" /></svg>;
+    case "maximize":     return <svg {...props}><path d="M4 9V4h5" /><path d="M20 9V4h-5" /><path d="M4 15v5h5" /><path d="M20 15v5h-5" /></svg>;
+    case "minimize":     return <svg {...props}><path d="M9 4v5H4" /><path d="M15 4v5h5" /><path d="M9 20v-5H4" /><path d="M15 20v-5h5" /></svg>;
     case "side-collapse":return <svg {...props}><rect x="3" y="4" width="18" height="16" rx="1.5" /><path d="M9 4v16" /><path d="m14 9 3 3-3 3" /></svg>;
     case "side-expand":  return <svg {...props}><rect x="3" y="4" width="18" height="16" rx="1.5" /><path d="M9 4v16" /><path d="m17 9-3 3 3 3" /></svg>;
     case "command":      return <svg {...props}><path d="M7 8a2 2 0 1 1 2-2v12a2 2 0 1 1-2-2h10a2 2 0 1 1-2 2V6a2 2 0 1 1 2 2H7z" /></svg>;

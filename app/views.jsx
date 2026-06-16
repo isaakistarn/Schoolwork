@@ -1205,9 +1205,23 @@ const CourseDetail = ({ courseId, onNavigate, pushToast }) => {
   const c = courseById(courseId);
 
   const [preview, setPreview] = useState(null);
+  const [fullscreen, setFullscreen] = useState(false);
   const [folderView, setFolderView] = useState(null);
   const [driveOpen, setDriveOpen] = useState(false);
   const fileRef = useRef(null);
+
+  const closePreview = () => { setPreview(null); setFullscreen(false); };
+
+  // Esc steps out of fullscreen first, then closes the preview; F toggles it.
+  useEffect(() => {
+    if (!preview) return;
+    const onKey = (e) => {
+      if (e.key === "Escape") { if (fullscreen) setFullscreen(false); else closePreview(); }
+      else if (e.key.toLowerCase() === "f") setFullscreen(v => !v);
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [preview, fullscreen]);
 
   if (!c) {
     return (
@@ -1326,14 +1340,15 @@ const CourseDetail = ({ courseId, onNavigate, pushToast }) => {
       </div>
 
       {preview && (
-        <div className="modal-overlay" onClick={() => setPreview(null)} role="dialog" aria-modal="true">
-          <div className="workarea-modal" onClick={e => e.stopPropagation()}>
+        <div className="modal-overlay" onClick={closePreview} role="dialog" aria-modal="true">
+          <div className={"workarea-modal" + (fullscreen ? " fullscreen" : "")} onClick={e => e.stopPropagation()}>
             <div className="workarea-h">
               <div className="wa-title"><h2>{preview.name}</h2><div className="wa-sub">{preview.size} · {preview.owner}</div></div>
               <div style={{ display: "flex", gap: 6 }}>
                 <button className="btn btn-secondary" onClick={() => download(preview)}><Icon name="download" size={14} /> Download</button>
-                <button className="btn btn-tertiary" style={{ color: "var(--error)" }} onClick={() => { if (confirm("Delete this file?")) { removeLibraryFile(preview.id); setPreview(null); pushToast?.({ tone: "warning", title: "File deleted" }); } }}><Icon name="trash" size={14} /></button>
-                <button className="iconbtn" onClick={() => setPreview(null)} aria-label="Close"><Icon name="close" /></button>
+                <button className="btn btn-tertiary" style={{ color: "var(--error)" }} onClick={() => { if (confirm("Delete this file?")) { removeLibraryFile(preview.id); closePreview(); pushToast?.({ tone: "warning", title: "File deleted" }); } }}><Icon name="trash" size={14} /></button>
+                <button className="iconbtn" onClick={() => setFullscreen(v => !v)} aria-label={fullscreen ? "Exit full screen" : "Full screen"} title={(fullscreen ? "Exit full screen" : "Full screen") + " (F)"}><Icon name={fullscreen ? "minimize" : "maximize"} /></button>
+                <button className="iconbtn" onClick={closePreview} aria-label="Close"><Icon name="close" /></button>
               </div>
             </div>
             <div className="wa-preview-body" style={{ display: "flex" }}>
@@ -1700,6 +1715,7 @@ const LibraryView = ({ pushToast }) => {
   const { library, addLibraryFile, removeLibraryFile, workspaceName } = useStore();
   const [query, setQuery] = useState("");
   const [preview, setPreview] = useState(null);
+  const [fullscreen, setFullscreen] = useState(false);
   const [folderView, setFolderView] = useState(null);
   const [newTextOpen, setNewTextOpen] = useState(false);
   const fileRef = useRef(null);
@@ -1735,6 +1751,19 @@ const LibraryView = ({ pushToast }) => {
     const file = addLibraryFile({ name, kind: kindOf(name), body: "", size: "0 B" });
     if (file) setPreview(file);
   };
+
+  const closePreview = () => { setPreview(null); setFullscreen(false); };
+
+  // Esc steps out of fullscreen first, then closes the preview.
+  useEffect(() => {
+    if (!preview) return;
+    const onKey = (e) => {
+      if (e.key === "Escape") { if (fullscreen) setFullscreen(false); else closePreview(); }
+      else if (e.key.toLowerCase() === "f") setFullscreen(v => !v);
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [preview, fullscreen]);
 
   const download = (f) => {
     let url, revoke = false;
@@ -1800,14 +1829,15 @@ const LibraryView = ({ pushToast }) => {
       </div>
 
       {preview && (
-        <div className="modal-overlay" onClick={() => setPreview(null)} role="dialog" aria-modal="true">
-          <div className="workarea-modal" onClick={e => e.stopPropagation()}>
+        <div className="modal-overlay" onClick={closePreview} role="dialog" aria-modal="true">
+          <div className={"workarea-modal" + (fullscreen ? " fullscreen" : "")} onClick={e => e.stopPropagation()}>
             <div className="workarea-h">
               <div className="wa-title"><h2>{preview.name}</h2><div className="wa-sub">{preview.size} · {preview.owner}</div></div>
               <div style={{ display: "flex", gap: 6 }}>
                 <button className="btn btn-secondary" onClick={() => download(preview)}><Icon name="download" size={14} /> Download</button>
-                <button className="btn btn-tertiary" style={{ color: "var(--error)" }} onClick={() => { if (confirm("Delete this file?")) { removeLibraryFile(preview.id); setPreview(null); pushToast?.({ tone: "warning", title: "File deleted" }); } }}><Icon name="trash" size={14} /></button>
-                <button className="iconbtn" onClick={() => setPreview(null)} aria-label="Close"><Icon name="close" /></button>
+                <button className="btn btn-tertiary" style={{ color: "var(--error)" }} onClick={() => { if (confirm("Delete this file?")) { removeLibraryFile(preview.id); closePreview(); pushToast?.({ tone: "warning", title: "File deleted" }); } }}><Icon name="trash" size={14} /></button>
+                <button className="iconbtn" onClick={() => setFullscreen(v => !v)} aria-label={fullscreen ? "Exit full screen" : "Full screen"} title={(fullscreen ? "Exit full screen" : "Full screen") + " (F)"}><Icon name={fullscreen ? "minimize" : "maximize"} /></button>
+                <button className="iconbtn" onClick={closePreview} aria-label="Close"><Icon name="close" /></button>
               </div>
             </div>
             <div className="wa-preview-body" style={{ display: "flex" }}>
