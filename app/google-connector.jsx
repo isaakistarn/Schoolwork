@@ -397,6 +397,20 @@ const GoogleConnector = (() => {
     const [busy, setBusy] = useState(false);
     const [error, setError] = useState(null);
     const [preview, setPreview] = useState(null);
+    const [fullscreen, setFullscreen] = useState(false);
+
+    const closePreview = () => { setPreview(null); setFullscreen(false); };
+
+    // Esc steps out of fullscreen first, then closes the preview; F toggles it.
+    useEffect(() => {
+      if (!preview) return;
+      const onKey = (e) => {
+        if (e.key === 'Escape') { if (fullscreen) setFullscreen(false); else closePreview(); }
+        else if (e.key.toLowerCase() === 'f') setFullscreen(v => !v);
+      };
+      window.addEventListener('keydown', onKey);
+      return () => window.removeEventListener('keydown', onKey);
+    }, [preview, fullscreen]);
 
     const refresh = useCallback(async () => {
       if (!api) return;
@@ -545,14 +559,17 @@ const GoogleConnector = (() => {
         </div>
 
         {preview && (
-          <div className="modal-overlay" onClick={() => setPreview(null)} role="dialog" aria-modal="true">
-            <div className="modal" onClick={e => e.stopPropagation()} style={{ width: 760, maxWidth: '92vw', height: '82vh', display: 'flex', flexDirection: 'column' }}>
+          <div className="modal-overlay" onClick={closePreview} role="dialog" aria-modal="true">
+            <div className="modal" onClick={e => e.stopPropagation()} style={fullscreen
+              ? { width: '100vw', maxWidth: '100vw', height: '100vh', borderRadius: 0, display: 'flex', flexDirection: 'column' }
+              : { width: 760, maxWidth: '92vw', height: '82vh', display: 'flex', flexDirection: 'column' }}>
               <div className="modal-h">
                 <div style={{ minWidth: 0 }}><h2 style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{preview.file.name}</h2></div>
                 <div style={{ display: 'flex', gap: 6 }}>
                   <button className="btn btn-tertiary btn-sm" onClick={() => api.openExternal(preview.file.webViewLink)} disabled={!preview.file.webViewLink}>Open in Drive</button>
                   <button className="btn btn-secondary btn-sm" onClick={() => addToLibrary(preview.file)}>Add to Library</button>
-                  <button className="iconbtn" onClick={() => setPreview(null)} aria-label="Close"><Icon name="close" /></button>
+                  <button className="iconbtn" onClick={() => setFullscreen(v => !v)} aria-label={fullscreen ? 'Exit full screen' : 'Full screen'} title={(fullscreen ? 'Exit full screen' : 'Full screen') + ' (F)'}><Icon name={fullscreen ? 'minimize' : 'maximize'} /></button>
+                  <button className="iconbtn" onClick={closePreview} aria-label="Close"><Icon name="close" /></button>
                 </div>
               </div>
               <div className="modal-b" style={{ flex: 1, overflow: 'auto', padding: 0, display: 'flex' }}>
