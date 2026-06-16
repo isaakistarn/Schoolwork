@@ -47,6 +47,13 @@ const PRIORITY_LABEL = { low: "Low", med: "Medium", high: "High" };
    ============================================================ */
 const isEssay = (type) => /essay/i.test(type || "");
 
+/* An assignment is exam-like when its type is labelled as an exam (e.g.
+   "Mock Exam", "Exam Practice") or it is the QCE External Assessment (EA),
+   which is sat as an exam. For these, "progress" makes no sense — you can't
+   be 60% through an exam — so the UI tracks a CONFIDENCE score instead
+   (how prepared/confident the student feels), stored in the same field. */
+const isExam = (a) => /exam/i.test((a && a.type) || "") || (a && a.assessment === "EA");
+
 /* Returns true when this assignment carries a draft deadline that hasn't
    been ticked off yet. Used to decide whether the draft date is still the
    "next deadline" or whether the row should switch to the final due date. */
@@ -94,6 +101,116 @@ function autoPriority(a, now = new Date()) {
   }
   return null;
 }
+
+/* ============================================================
+   Study sessions, progress measurement & recommendations
+   ----------------------------------------------------------------
+   A study session is a logged block of work: { id, date, minutes,
+   course, assignment (optional), note }. Progress is a 0–100 measure
+   of how done an assignment is — stored explicitly on the assignment
+   once the student starts tracking it, otherwise inferred from its
+   workflow status so older data still reads sensibly.
+   ============================================================ */
+
+// Fallback progress for an assignment that has no explicit `progress`
+// value yet — derived from its workflow status.
+const STATUS_PROGRESS = { not_started: 0, in_progress: 45, in_review: 80, submitted: 100, graded: 100, late: 50 };
+function assignmentProgress(a) {
+  if (a && typeof a.progress === "number") return Math.max(0, Math.min(100, a.progress));
+  return STATUS_PROGRESS[a && a.status] ?? 0;
+}
+
+// Total minutes logged against an assignment (or, with no id, a subject).
+function studyMinutes(sessions, { assignment, course } = {}) {
+  return (sessions || []).reduce((sum, s) => {
+    if (assignment && s.assignment !== assignment) return sum;
+    if (course && s.course !== course) return sum;
+    return sum + (Number(s.minutes) || 0);
+  }, 0);
+}
+
+// Minutes logged within the trailing 7 days.
+function weeklyStudyMinutes(sessions, now = new Date()) {
+  const cutoff = new Date(now); cutoff.setDate(cutoff.getDate() - 7);
+  return (sessions || []).reduce((sum, s) => {
+    const d = new Date((s.date || "") + (String(s.date || "").length <= 10 ? "T12:00" : ""));
+    return (!isNaN(d) && d >= cutoff) ? sum + (Number(s.minutes) || 0) : sum;
+  }, 0);
+}
+
+/* The local recommendation engine. For every open (not submitted/graded)
+   assignment with a due date it works out:
+     - daysLeft   : calendar days until due (negative = overdue)
+     - progress   : 0–100 (explicit or status-derived)
+     - remaining  : estimated minutes of work still to do
+     - logged     : minutes already studied against it
+     - perDay     : remaining work spread across the days left
+   then ranks by a pressure score and tags a severity so the Study view
+   can say what to do next. Pure + deterministic (now is injected). */
+function studyRecommendations(assignments, sessions, now = new Date()) {
+  const open = (assignments || []).filter(a => a.status !== "graded" && a.status !== "submitted" && a.due);
+  return open.map(a => {
+    const due = new Date(a.due);
+    const days = (due - now) / 864e5;
+    const progress = assignmentProgress(a);
+    const est = Math.max(15, Number(a.est) || 60);
+    const remaining = Math.round(est * (1 - progress / 100));
+    const logged = studyMinutes(sessions, { assignment: a.id });
+    const daysLeft = Math.max(days, 0);
+    const perDay = daysLeft >= 1 ? remaining / daysLeft : remaining;
+
+    let severity = "low";
+    if (days < 0 && progress < 100) severity = "overdue";
+    else if ((days <= 2 && progress < 85) || perDay >= 90) severity = "high";
+    else if ((days <= 5 && progress < 60) || perDay >= 45) severity = "med";
+
+    // Higher = more urgent. Overdue dominates; then work-per-day; an
+    // untouched task gets a nudge; visible progress relieves pressure.
+    const score = (days < 0 ? 1000 - days : 0) + perDay
+      + (logged === 0 ? 25 : 0) + (progress < 10 ? 15 : 0) - progress / 5;
+
+    return { id: a.id, assignment: a, exam: isExam(a), days, daysLeft, progress, est, remaining, logged, perDay, severity, score };
+  }).sort((x, y) => y.score - x.score);
+}
+
+/* A short, human next-action line for one recommendation row. Exam-like
+   tasks are phrased around revision and a confidence score; everything else
+   around work done and progress. */
+function recMessage(r) {
+  const mins = Math.max(0, Math.round(r.remaining));
+  const blocks = Math.max(1, Math.round(r.remaining / 30)); // ~30-min study blocks
+  const days = Math.round(r.days);
+  const pct = Math.round(r.progress);
+
+  if (r.exam) {
+    if (r.days < 0) return `Exam date has passed.`;
+    if (r.days <= 1) return `Exam ${r.days < 1 ? "today" : "tomorrow"} — ${pct}% confident. Do a calm final review (~${mins} min).`;
+    if (r.logged === 0) return `No revision logged yet — book a ${blocks > 1 ? blocks + " × 30-min" : "30-min"} revision block. Exam in ${days} days.`;
+    if (r.severity === "high") return `Under-prepared (${pct}% confident) with the exam in ${days} days — ramp up to ~${Math.round(r.perDay)} min/day of revision.`;
+    if (r.severity === "med") return `Building confidence (${pct}%). Keep ~${Math.round(r.perDay)} min/day of revision; exam in ${days} days.`;
+    return `Feeling ready — ${pct}% confident with ${days} days to go. Light revision to stay sharp.`;
+  }
+
+  if (r.severity === "overdue") return `Overdue by ${Math.abs(days)} day${Math.abs(days) === 1 ? "" : "s"} — finish and submit. ~${mins} min of work left.`;
+  if (r.days <= 1) return `Due ${r.days < 1 ? "today" : "tomorrow"} at ${pct}% done — focus here next (~${mins} min left).`;
+  if (r.logged === 0) return `Not started yet — book a ${blocks > 1 ? blocks + " × 30-min" : "30-min"} block. Due in ${days} days.`;
+  if (r.severity === "high") return `Behind pace: about ${Math.round(r.perDay)} min/day needed to finish on time (${pct}% done).`;
+  if (r.severity === "med") return `On track if you do ~${Math.round(r.perDay)} min/day. ${pct}% done, due in ${days} days.`;
+  return `Comfortable — ${pct}% done with ${days} days left. Keep ticking it over.`;
+}
+
+/* ============================================================
+   OpenAI model presets for the connector dropdown. The connector can
+   also pull the live list from the API; these are the sensible defaults
+   shown before (or instead of) a live fetch.
+   ============================================================ */
+const OPENAI_MODELS = [
+  { id: "gpt-4o-mini", label: "GPT-4o mini — fast, low cost" },
+  { id: "gpt-4o",      label: "GPT-4o — most capable" },
+  { id: "gpt-4.1-mini",label: "GPT-4.1 mini" },
+  { id: "gpt-4.1",     label: "GPT-4.1" },
+  { id: "o4-mini",     label: "o4-mini — reasoning" },
+];
 
 /* ============================================================
    Default term profiles + dates (editable per account in Settings).
@@ -179,7 +296,7 @@ const DEFAULT_CALENDARS = [
 function seedProfile() {
   return {
     courses: [], assignments: [], attachments: {}, notes: [],
-    schedule: [], calendars: JSON.parse(JSON.stringify(DEFAULT_CALENDARS)), events: [], library: [],
+    schedule: [], calendars: JSON.parse(JSON.stringify(DEFAULT_CALENDARS)), events: [], library: [], sessions: [], aiHistory: [],
   };
 }
 
@@ -187,8 +304,10 @@ window.SchoolworkData = {
   DEFAULT_CALENDARS, DEFAULT_TERMS, SCHOOLS, termsForSchool,
   STATUS_LABEL, STATUS_BADGE, PRIORITY_LABEL, TYPES_BY_COURSE,
   termState, termWeeks, termDatesLabel,
-  isEssay, autoPriority, hasOpenDraft,
+  isEssay, isExam, autoPriority, hasOpenDraft,
   ASSESSMENT_KINDS, ASSESSMENT_LABEL, ASSESSMENT_FULL, ASSESSMENT_DEFAULT_WEIGHT,
   isSummative, classGrade,
+  assignmentProgress, studyMinutes, weeklyStudyMinutes,
+  studyRecommendations, recMessage, OPENAI_MODELS,
   seedProfile,
 };

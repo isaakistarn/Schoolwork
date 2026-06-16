@@ -223,6 +223,7 @@ const NAV_PRIMARY = [
   { id: "dashboard",   label: "Dashboard",   icon: "home" },
   { id: "assignments", label: "Assignments", icon: "assignments", count: "assignmentsOpen" },
   { id: "calendar",    label: "Calendar",    icon: "calendar" },
+  { id: "study",       label: "Study",       icon: "target" },
   { id: "notes",       label: "Notes",       icon: "notes", count: "notes" },
   { id: "grades",      label: "Grades",      icon: "grades" },
   { id: "totals",      label: "Total grades", icon: "totals" },

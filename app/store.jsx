@@ -49,6 +49,8 @@ const StoreProvider = ({ children }) => {
       calendars: d.calendars || JSON.parse(JSON.stringify(seed.DEFAULT_CALENDARS)),
       events: d.events || [],
       library: d.library || [],
+      sessions: d.sessions || [],
+      aiHistory: d.aiHistory || [],
     };
   }
 
@@ -106,7 +108,7 @@ const StoreProvider = ({ children }) => {
   const clearLimitNotice = useCallback(() => setLimitNotice(null), []);
 
   /* ---------- destructured slices ---------- */
-  const { courses, assignments, attachments, notes, schedule, calendars, events, library } = data;
+  const { courses, assignments, attachments, notes, schedule, calendars, events, library, sessions, aiHistory } = data;
 
   const patch = (slice) => setData(d => ({ ...d, ...slice }));
 
@@ -168,6 +170,7 @@ const StoreProvider = ({ children }) => {
         draftSubmittedAt: row.draftSubmittedAt || null, // ISO timestamp, independent of `status`
         status: row.status || "not_started",
         priority: row.priority || "med",
+        progress: row.progress ?? 0,          // 0–100 work-done measure (Study view)
         weight: row.weight ?? (seed.ASSESSMENT_DEFAULT_WEIGHT[assessment] ?? 5),
         points: row.points ?? 50, earned: row.earned ?? null,
         est: row.est ?? 60, notes: row.notes ?? "",
@@ -203,7 +206,7 @@ const StoreProvider = ({ children }) => {
   const addClass = useCallback((row = {}) => {
     let created = null;
     setData(d => {
-      created = { id: uid("CL"), day: row.day ?? 0, start: row.start || "09:00", end: row.end || "10:00", title: row.title || "New class", course: row.course || d.courses[0]?.id, kind: row.kind || "lecture", room: row.room || "" };
+      created = { id: uid("CL"), day: row.day ?? 0, start: row.start || "09:00", end: row.end || "10:00", title: row.title || "New class", course: row.course || d.courses[0]?.id, room: row.room || "" };
       return { ...d, schedule: [...d.schedule, created] };
     });
     return created;
@@ -302,6 +305,39 @@ const StoreProvider = ({ children }) => {
   const updateLibraryFile = useCallback((id, p) => setData(d => ({ ...d, library: d.library.map(r => r.id === id ? { ...r, ...p } : r) })), []);
   const removeLibraryFile = useCallback((id) => setData(d => ({ ...d, library: d.library.filter(r => r.id !== id) })), []);
 
+  /* ---------- study sessions (logged blocks of work) ---------- */
+  const addSession = useCallback((row = {}) => {
+    let created = null;
+    setData(d => {
+      if (!checkLimit("sessions", d.sessions.length)) return d;
+      created = {
+        id: uid("S"),
+        date: row.date || new Date().toISOString().slice(0, 10),
+        minutes: Math.max(0, Number(row.minutes) || 0),
+        course: row.course || null,
+        assignment: row.assignment || null,
+        note: row.note || "",
+        logged: new Date().toISOString(),
+      };
+      return { ...d, sessions: [created, ...d.sessions] };
+    });
+    return created;
+  }, [checkLimit]);
+  const updateSession = useCallback((id, p) => setData(d => ({ ...d, sessions: d.sessions.map(r => r.id === id ? { ...r, ...p } : r) })), []);
+  const removeSession = useCallback((id) => setData(d => ({ ...d, sessions: d.sessions.filter(r => r.id !== id) })), []);
+
+  /* ---------- AI analysis history (Study view) ---------- */
+  // Kept to the last 20 runs so the log can't grow without bound.
+  const addAiRun = useCallback((entry = {}) => {
+    let created = null;
+    setData(d => {
+      created = { id: uid("AI"), at: new Date().toISOString(), ...entry };
+      return { ...d, aiHistory: [created, ...(d.aiHistory || [])].slice(0, 20) };
+    });
+    return created;
+  }, []);
+  const clearAiHistory = useCallback(() => setData(d => ({ ...d, aiHistory: [] })), []);
+
   const courseById = useCallback((id) => courses.find(c => c.id === id) || courses[0] || null, [courses]);
 
   /* ---------- account-backed identity ---------- */
@@ -311,10 +347,11 @@ const StoreProvider = ({ children }) => {
   const usage = useMemo(() => ({
     assignments: assignments.length, notes: notes.length, courses: courses.length,
     calendars: calendars.length, events: events.length, library: library.length,
-  }), [assignments, notes, courses, calendars, events, library]);
+    sessions: sessions.length,
+  }), [assignments, notes, courses, calendars, events, library, sessions]);
 
   const value = {
-    courses, assignments, attachments, notes, schedule, calendars, events, library,
+    courses, assignments, attachments, notes, schedule, calendars, events, library, sessions, aiHistory,
     userName, setUserName, workspaceName, setWorkspaceName,
     updateAssignment, addAssignment, removeAssignment,
     updateCourse, addCourse, removeCourse,
@@ -324,6 +361,8 @@ const StoreProvider = ({ children }) => {
     addCalendar, updateCalendar, removeCalendar,
     addEvent, updateEvent, removeEvent,
     addLibraryFile, updateLibraryFile, removeLibraryFile,
+    addSession, updateSession, removeSession,
+    addAiRun, clearAiHistory,
     courseById,
     terms, setTerms,
     limits, usage, limitNotice, clearLimitNotice,

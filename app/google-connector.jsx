@@ -737,7 +737,127 @@ const GoogleConnector = (() => {
     );
   };
 
-  return { Panel, DrivePanel, DriveBrowser, CalendarPush, isDesktop };
+  /* -------------------------------------------------------- */
+  /* OpenAI connector — API key + model selection. The key is   */
+  /* held encrypted in the main process; here we only set it,   */
+  /* pick a model, and (optionally) pull the live model list.   */
+  /* -------------------------------------------------------- */
+  const OpenAIPanel = ({ pushToast }) => {
+    const { account } = window.Auth.useAuth();
+    const seed = window.SchoolworkData;
+
+    const [cfg, setCfg]       = useState({ hasKey: false, model: 'gpt-4o-mini' });
+    const [apiKey, setApiKey] = useState('');
+    const [model, setModel]   = useState('gpt-4o-mini');
+    const [models, setModels] = useState(seed.OPENAI_MODELS.map(m => m.id));
+    const [busy, setBusy]     = useState(false);
+
+    const refresh = useCallback(async () => {
+      if (!api) return;
+      try {
+        await api.setAccount?.(account?.id);
+        const c = await api.openai.getConfig();
+        setCfg(c); setModel(c.model || 'gpt-4o-mini');
+      } catch { /* main process not ready / not desktop */ }
+    }, [account]);
+    useEffect(() => { refresh(); }, [refresh]);
+
+    const save = async () => {
+      if (!cfg.hasKey && !apiKey.trim()) { pushToast?.({ tone: 'warning', title: 'Enter an API key', body: 'Paste your OpenAI API key first.' }); return; }
+      setBusy(true);
+      try {
+        await api.setAccount?.(account?.id);
+        const c = await api.openai.setConfig({ apiKey: apiKey.trim() || undefined, model });
+        setCfg(c); setApiKey('');
+        pushToast?.({ tone: 'success', title: 'OpenAI settings saved' });
+      } catch (e) {
+        pushToast?.({ tone: 'warning', title: 'Could not save', body: e.message });
+      } finally { setBusy(false); }
+    };
+
+    const loadModels = async () => {
+      setBusy(true);
+      try {
+        await api.setAccount?.(account?.id);
+        const ids = await api.openai.listModels();
+        if (ids && ids.length) setModels(ids);
+        pushToast?.({ tone: 'success', title: 'Models refreshed', body: (ids?.length || 0) + ' available to your key.' });
+      } catch (e) {
+        pushToast?.({ tone: 'warning', title: 'Could not list models', body: e.message });
+      } finally { setBusy(false); }
+    };
+
+    const clear = async () => {
+      if (!confirm('Remove the saved OpenAI API key from this device?')) return;
+      try { await api.setAccount?.(account?.id); await api.openai.clear(); } catch {}
+      setCfg({ hasKey: false, model }); setApiKey('');
+      pushToast?.({ tone: 'success', title: 'API key removed' });
+    };
+
+    if (!isDesktop) {
+      return (
+        <section style={{ marginBottom: 32 }}>
+          <h2 style={{ margin: 0, fontSize: 16, fontWeight: 600 }}>OpenAI (study recommendations)</h2>
+          <div className="empty" style={{ background: 'var(--bg-surface)', border: '1px solid var(--bd-default)', borderRadius: 6, padding: 'var(--s-10)', marginTop: 12 }}>
+            <div className="empty-icon"><Icon name="help" /></div>
+            <h3>Available in the desktop app only</h3>
+            <p>AI analysis runs through the desktop runtime so your API key stays encrypted on this device and never touches the web.</p>
+          </div>
+        </section>
+      );
+    }
+
+    // Build a deduped model option list: live/saved ids plus the current one.
+    const labelFor = (id) => (seed.OPENAI_MODELS.find(m => m.id === id) || {}).label || id;
+    const modelOptions = Array.from(new Set([...(models || []), model])).filter(Boolean);
+
+    return (
+      <section style={{ marginBottom: 32 }}>
+        <h2 style={{ margin: 0, fontSize: 16, fontWeight: 600 }}>OpenAI (study recommendations)</h2>
+        <p style={{ margin: '4px 0 16px', fontSize: 13, color: 'var(--fg-secondary)' }}>
+          Add your own OpenAI API key to unlock “Analyse with AI” in the Study view — it reads your task sheets and
+          scaffolds and turns your logged study time and progress into specific next steps. The key is encrypted with the
+          OS keychain and only ever used from this device.
+        </p>
+
+        <div style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '12px 0', borderBottom: '1px solid var(--bd-subtle)' }}>
+          <Icon name="help" size={18} />
+          <div style={{ flex: 1 }}>
+            <div style={{ fontWeight: 500 }}>API key</div>
+            <div style={{ fontSize: 12, color: 'var(--fg-tertiary)' }}>Stored encrypted at rest with the OS keychain.</div>
+          </div>
+          {cfg.hasKey
+            ? <span className="badge success">Key saved</span>
+            : <span className="badge neutral">No key</span>}
+        </div>
+
+        <div style={{ display: 'grid', gridTemplateColumns: '180px 1fr', gap: 16, alignItems: 'center', padding: '10px 0', borderBottom: '1px solid var(--bd-subtle)' }}>
+          <div style={{ fontSize: 13, fontWeight: 500 }}>{cfg.hasKey ? 'Replace key' : 'API key'}</div>
+          <input className="input" type="password" placeholder={cfg.hasKey ? '•••••••••• (leave blank to keep)' : 'sk-…'} value={apiKey} onChange={e => setApiKey(e.target.value)} />
+        </div>
+
+        <div style={{ display: 'grid', gridTemplateColumns: '180px 1fr', gap: 16, alignItems: 'center', padding: '10px 0', borderBottom: '1px solid var(--bd-subtle)' }}>
+          <div style={{ fontSize: 13, fontWeight: 500 }}>Model</div>
+          <div style={{ display: 'flex', gap: 8 }}>
+            <select className="select" style={{ flex: 1 }} value={model} onChange={e => setModel(e.target.value)}>
+              {modelOptions.map(id => <option key={id} value={id}>{labelFor(id)}</option>)}
+            </select>
+            <button className="btn btn-tertiary" onClick={loadModels} disabled={busy || !cfg.hasKey} title="Fetch the models available to your API key">
+              <Icon name="refresh" size={14} /> Refresh
+            </button>
+          </div>
+        </div>
+
+        <div style={{ marginTop: 12, display: 'flex', gap: 8 }}>
+          <button className="btn btn-primary" onClick={save} disabled={busy}>{busy ? 'Working…' : 'Save'}</button>
+          {cfg.hasKey && <button className="btn btn-tertiary" style={{ color: 'var(--error)' }} onClick={clear} disabled={busy}>Remove key</button>}
+          <a className="btn btn-tertiary" href="#" onClick={(e) => { e.preventDefault(); api?.openExternal('https://platform.openai.com/api-keys'); }}>Get an API key</a>
+        </div>
+      </section>
+    );
+  };
+
+  return { Panel, DrivePanel, DriveBrowser, CalendarPush, OpenAIPanel, isDesktop };
 })();
 
 window.GoogleConnector = GoogleConnector;

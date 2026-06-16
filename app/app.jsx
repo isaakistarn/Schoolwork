@@ -343,6 +343,8 @@ const AppInner = ({ tweaks, setTweak }) => {
     if (active === "dashboard")   return <Dashboard onOpen={onOpenAssignment} onNavigate={setActive} onQuickAdd={() => setQuickAddOpen(true)} />;
     if (active === "assignments") return <AssignmentsView onOpen={onOpenAssignment} onOpenWorkArea={onOpenWorkArea} onDelete={onDeleteAssignment} onNew={() => setQuickAddOpen(true)} selected={selectedRows} setSelected={setSelectedRows} pushToast={pushToast} />;
     if (active === "calendar")    return <CalendarView pushToast={pushToast} />;
+    if (active === "study")       return <window.Views.StudyView pushToast={pushToast} onOpen={onOpenAssignment} onNavigate={setActive} />;
+    if (active === "ai-history")  return <window.Views.AiHistoryView pushToast={pushToast} onNavigate={setActive} />;
     if (active === "notes")       return <NotesView pushToast={pushToast} />;
     if (active === "grades")      return <GradesView />;
     if (active === "totals")      return <TotalGradesView />;

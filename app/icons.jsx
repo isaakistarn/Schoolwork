@@ -62,6 +62,9 @@ const Icon = ({ name, size = 16, className = "", strokeWidth = 1.6 }) => {
     case "window-min":   return <svg {...props}><path d="M5 18h14" /></svg>;
     case "window-max":   return <svg {...props}><rect x="5" y="5" width="14" height="14" /></svg>;
     case "window-close": return <svg {...props}><path d="M6 6l12 12M18 6 6 18" /></svg>;
+    case "target":       return <svg {...props}><circle cx="12" cy="12" r="8" /><circle cx="12" cy="12" r="4" /><circle cx="12" cy="12" r=".5" fill="currentColor" /></svg>;
+    case "spark":        return <svg {...props}><path d="M12 3l1.8 5.2L19 10l-5.2 1.8L12 17l-1.8-5.2L5 10l5.2-1.8L12 3z" /><path d="M18 15l.7 2.1L21 18l-2.3.9L18 21l-.7-2.1L15 18l2.3-.9L18 15z" /></svg>;
+    case "play":         return <svg {...props}><path d="M7 5l12 7-12 7V5z" /></svg>;
     default: return null;
   }
 };

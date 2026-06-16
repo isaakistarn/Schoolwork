@@ -31,6 +31,7 @@ Three runtime layers:
 | `main.js` | Electron **main process**. Window creation; IPC handlers (`app:set-account`, `google:*`, `drive:*`, `shell:open`, `legal:read`); per-account OAuth token/client storage (encrypted with the OS keychain via `safeStorage`/DPAPI). |
 | `preload.js` | `contextBridge` → `window.schoolworkAPI` (`setAccount`, `google.*`, `drive.*`, `openExternal`, `legal.read`). |
 | `google-calendar.js` | Main-process Google **Calendar** integration: OAuth loopback + PKCE flow, list calendars, upsert/delete/purge events. Times are pinned to **AEST (Australia/Brisbane)**. |
+| `main.js` (OpenAI IPC) | Main-process **OpenAI** integration: stores the API key + model choice encrypted per account (`openai-config-<accountId>.enc`), lists models, and runs chat-completion analyses (`openai:analyze`). All OpenAI network calls happen here, so the renderer CSP never needs to allow `api.openai.com`. |
 | `google-drive.js` | Main-process Google **Drive** integration (read-only): browse folders / "Shared with me" / shared drives, search, and download/export file content for in-app preview. |
 | `package.json` | App metadata, scripts (`start`, `build`), and the electron-builder config (what gets bundled into the installer). |
 | `logo.svg` | The app icon/logo (graduation cap). A copy lives at `app/logo.svg` for the renderer to load. |
@@ -52,16 +53,16 @@ Scripts load in a fixed order from `index.html`. Each attaches its exports to a
 | `index.html` | — | Entry point. Sets the Content-Security-Policy, default theme, and the **script load order**. |
 | `styles.css` | — | All styling: design tokens, light/dark theming (`[data-theme]`), density (`[data-density]`), and the entrance **splash animation**. |
 | `vendor/` | `React`, `ReactDOM`, `Babel` | Offline copies of React 18, ReactDOM, and Babel standalone. |
-| `data.jsx` | `window.SchoolworkData` | App-wide constants & pure helpers: status/priority vocab, `TYPES_BY_COURSE`, default calendars, **term definitions + `termState`/`termWeeks`/`termDatesLabel`**, **`autoPriority`/`isEssay`**, and `seedProfile` (every profile starts empty). No demo data. |
+| `data.jsx` | `window.SchoolworkData` | App-wide constants & pure helpers: status/priority vocab, `TYPES_BY_COURSE`, default calendars, **term definitions + `termState`/`termWeeks`/`termDatesLabel`**, **`autoPriority`/`isEssay`**, **study helpers (`assignmentProgress`, `studyMinutes`, `weeklyStudyMinutes`, `studyRecommendations`, `recMessage`) + `OPENAI_MODELS`**, and `seedProfile` (every profile starts empty). No demo data. |
 | `ui.jsx` | `window.UI` | Shared primitives: `fmt` (date/time), `Badge`, `Priority`, `Checkbox`, `StatusBadge`, `Progress`, and **`PdfFrame`** (renders PDFs via a blob URL). |
 | `icons.jsx` | `window.Icon` | The SVG icon set. |
-| `store.jsx` | `window.Store` | **`StoreProvider`** — the data store, scoped per account **and** per (year, term) profile, persisted to `localStorage`; all CRUD (courses, assignments, notes, schedule, calendars, events, library), **configurable terms**, rate-limit gate, dirty-flag + `reloadProfile` (refresh). Also `EditProvider` and the inline `Editable*` editors. |
+| `store.jsx` | `window.Store` | **`StoreProvider`** — the data store, scoped per account **and** per (year, term) profile, persisted to `localStorage`; all CRUD (courses, assignments, notes, schedule, calendars, events, library, **study sessions**), **configurable terms**, rate-limit gate, dirty-flag + `reloadProfile` (refresh). Assignments carry a numeric **`progress`** (0–100). Also `EditProvider` and the inline `Editable*` editors. |
 | `auth.jsx` | `window.Auth` | **`AuthProvider`** — local accounts (salted-hashed passwords), tiers & per-term limits, notification prefs, the two unlimited emails. Also the entrance **`Splash`** and the **`LoginScreen`**. |
 | `chrome.jsx` | `window.Chrome` | App frame: **`AppBar`** (term switcher with derived state, search, notifications bell, refresh, account menu), **`Sidebar`**, **`StatusBar`** (density toggle). |
-| `views.jsx` | `window.Views` | Most screens: `Dashboard`, `CoursesView`, `CalendarView` (+ `CalEditor`, `WeeklyScheduleModal`), `NotesView`, `GradesView`, `CourseDetail`, **`Inspector`**, `LibraryView` (+ `LibraryFilePreview`), **`SettingsView`** (account / appearance / academic-year / subjects / notifications / connectors / shortcuts / storage / about), and **`Onboarding`**. |
+| `views.jsx` | `window.Views` | Most screens: `Dashboard`, `CoursesView`, `CalendarView` (+ `CalEditor`, `WeeklyScheduleModal`), **`StudyView`** (session logging, per-assignment progress, local + AI "what to do next"), `NotesView`, `GradesView`, `CourseDetail`, **`Inspector`**, `LibraryView` (+ `LibraryFilePreview`), **`SettingsView`** (account / appearance / academic-year / subjects / notifications / connectors / shortcuts / storage / about), and **`Onboarding`**. |
 | `view-assignments.jsx` | `window.AssignmentsView` | The assignments table (filter, sort, paginate, bulk select/delete). |
 | `work-area.jsx` | `window.WorkArea` | The per-assignment file workspace (attachments + preview). |
-| `google-connector.jsx` | `window.GoogleConnector` | Renderer side of Google: **`Panel`** (Calendar connect + push), **`DriveBrowser`** (reusable folder browser + preview) and **`DrivePanel`**, and **`CalendarPush`** (the "Push to Google" button used on the Calendar page). |
+| `google-connector.jsx` | `window.GoogleConnector` | Renderer side of Google: **`Panel`** (Calendar connect + push), **`DriveBrowser`** (reusable folder browser + preview) and **`DrivePanel`**, **`CalendarPush`** (the "Push to Google" button used on the Calendar page), and **`OpenAIPanel`** (API-key + model selection for AI study recommendations, shown in Settings → Connectors). |
 | `legal.jsx` | `window.Legal` | `LegalModal` — renders `PRIVACY.md` / `TERMS.md` (read via `schoolworkAPI.legal.read`). |
 | `tweaks-panel.jsx` | `window.useTweaks`, `window.TweaksPanel`, … | A generic floating "Tweaks" panel + the `useTweaks` hook used for live appearance controls. |
 | `app.jsx` | — (mounts the app) | Root component: `App → Gate` (auth gate + theme/accent application) `→ AppInner` (layout, routing between views, keyboard shortcuts, toasts). Also `QuickAddModal`, `LimitModal`, `ToastHost`. Calls `ReactDOM.createRoot(...).render(<App/>)`. |
@@ -83,9 +84,10 @@ Inside the userData folder:
 
 | Path | Contents |
 |---|---|
-| `Local Storage\leveldb\` | **The bulk of your data** (a LevelDB, not hand-editable). Keys: `schoolwork:accounts`, `schoolwork:session`, `schoolwork:tweaks` (appearance), `schoolwork:terms:<accountId>` (term dates), `schoolwork:lastProfile:<accountId>` (active term), and `schoolwork:data:<accountId>:<term>` — each term's workspace: courses, assignments, notes, weekly schedule, calendars, events, and **Library files (embedded as base64)**. |
+| `Local Storage\leveldb\` | **The bulk of your data** (a LevelDB, not hand-editable). Keys: `schoolwork:accounts`, `schoolwork:session`, `schoolwork:tweaks` (appearance), `schoolwork:terms:<accountId>` (term dates), `schoolwork:lastProfile:<accountId>` (active term), and `schoolwork:data:<accountId>:<term>` — each term's workspace: courses, assignments, notes, weekly schedule, calendars, events, **study sessions**, and **Library files (embedded as base64)**. |
 | `google-client-<accountId>.json` | Your Google OAuth **client ID/secret**, scoped per account. |
 | `google-token-<accountId>.enc` | Your Google OAuth **tokens**, encrypted with the OS keychain (Windows DPAPI), scoped per account. |
+| `openai-config-<accountId>.enc` | Your **OpenAI API key + selected model**, encrypted with the OS keychain, scoped per account. Used only by the main process for AI study analysis. |
 | `Cache/`, `GPUCache/`, `Network/`, `Session Storage/`, … | Chromium internals — not your content. |
 
 **Key idea — everything is namespaced by account + term:**

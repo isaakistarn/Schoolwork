@@ -16,6 +16,7 @@ let activeAccount = 'default';
 const sanitizeAcct = (id) => (String(id || 'default').replace(/[^a-zA-Z0-9_-]/g, '_').slice(0, 64) || 'default');
 const tokenPath = () => path.join(userDataPath(), 'google-token-' + activeAccount + '.enc');
 const configPath = () => path.join(userDataPath(), 'google-client-' + activeAccount + '.json');
+const openaiConfigPath = () => path.join(userDataPath(), 'openai-config-' + activeAccount + '.enc');
 
 let mainWindow = null;
 
@@ -115,6 +116,103 @@ ipcMain.handle('app:set-account', (_e, id) => { activeAccount = sanitizeAcct(id)
 ipcMain.handle('google:get-client', () => loadClientConfig());
 ipcMain.handle('google:set-client', (_e, cfg) => { saveClientConfig(cfg); return true; });
 
+/* ---------- OpenAI config (API key + model), scoped per account ----------
+ *
+ * The API key is a secret, so — exactly like the Google tokens — it is
+ * encrypted at rest with the OS keychain (DPAPI on Windows) and never
+ * leaves the main process. The renderer only ever learns whether a key is
+ * present and which model is selected. All OpenAI network calls run here,
+ * so the renderer's CSP never has to allow api.openai.com.
+ */
+function saveOpenAIConfig(cfg) {
+  const json = JSON.stringify(cfg);
+  if (safeStorage.isEncryptionAvailable()) fs.writeFileSync(openaiConfigPath(), safeStorage.encryptString(json));
+  else fs.writeFileSync(openaiConfigPath(), json, 'utf8');
+}
+function loadOpenAIConfig() {
+  if (!fs.existsSync(openaiConfigPath())) return null;
+  try {
+    const buf = fs.readFileSync(openaiConfigPath());
+    const json = safeStorage.isEncryptionAvailable() ? safeStorage.decryptString(buf) : buf.toString('utf8');
+    return JSON.parse(json);
+  } catch { return null; }
+}
+function clearOpenAIConfig() { try { fs.unlinkSync(openaiConfigPath()); } catch {} }
+
+// Minimal OpenAI REST helper over node:https (no SDK dependency).
+function openaiRequest(method, apiPath, apiKey, body) {
+  return new Promise((resolve, reject) => {
+    const data = body ? JSON.stringify(body) : null;
+    const req = https.request({
+      hostname: 'api.openai.com',
+      path: apiPath,
+      method,
+      headers: {
+        'Authorization': 'Bearer ' + apiKey,
+        'Content-Type': 'application/json',
+        ...(data ? { 'Content-Length': Buffer.byteLength(data) } : {}),
+      },
+      timeout: 90000,
+    }, (res) => {
+      let buf = '';
+      res.setEncoding('utf8');
+      res.on('data', (c) => { buf += c; });
+      res.on('end', () => {
+        let json = null; try { json = JSON.parse(buf); } catch {}
+        if (res.statusCode >= 200 && res.statusCode < 300) { resolve(json); return; }
+        const msg = (json && json.error && json.error.message) || ('OpenAI request failed (HTTP ' + res.statusCode + ')');
+        reject(new Error(msg));
+      });
+    });
+    req.on('error', reject);
+    req.on('timeout', () => req.destroy(new Error('OpenAI request timed out')));
+    if (data) req.write(data);
+    req.end();
+  });
+}
+
+ipcMain.handle('openai:get-config', () => {
+  const c = loadOpenAIConfig();
+  return { hasKey: !!(c && c.apiKey), model: (c && c.model) || 'gpt-4o-mini' };
+});
+ipcMain.handle('openai:set-config', (_e, { apiKey, model } = {}) => {
+  const cur = loadOpenAIConfig() || {};
+  const key = (apiKey != null && String(apiKey).trim() !== '') ? String(apiKey).trim() : cur.apiKey;
+  if (!key) throw new Error('Enter an OpenAI API key.');
+  const next = { apiKey: key, model: model || cur.model || 'gpt-4o-mini' };
+  saveOpenAIConfig(next);
+  return { hasKey: true, model: next.model };
+});
+ipcMain.handle('openai:clear', () => { clearOpenAIConfig(); return { hasKey: false }; });
+
+ipcMain.handle('openai:list-models', async () => {
+  const c = loadOpenAIConfig();
+  if (!c || !c.apiKey) throw new Error('No OpenAI API key saved.');
+  const r = await openaiRequest('GET', '/v1/models', c.apiKey, null);
+  return ((r && r.data) || [])
+    .map((m) => m.id)
+    .filter((id) => /^(gpt-|o\d|chatgpt)/i.test(id))
+    .sort();
+});
+
+ipcMain.handle('openai:analyze', async (_e, { system, prompt, model } = {}) => {
+  const c = loadOpenAIConfig();
+  if (!c || !c.apiKey) throw new Error('No OpenAI API key saved. Add one in Settings → Connectors.');
+  const useModel = model || c.model || 'gpt-4o-mini';
+  const r = await openaiRequest('POST', '/v1/chat/completions', c.apiKey, {
+    model: useModel,
+    messages: [
+      ...(system ? [{ role: 'system', content: system }] : []),
+      { role: 'user', content: String(prompt || '') },
+    ],
+    temperature: 0.4,
+  });
+  const text = (r && r.choices && r.choices[0] && r.choices[0].message && r.choices[0].message.content) || '';
+  const u = r && r.usage;
+  const usage = u ? { prompt: u.prompt_tokens || 0, completion: u.completion_tokens || 0, total: u.total_tokens || 0 } : null;
+  return { text, model: useModel, usage };
+});
+
 /* ---------- IPC: OAuth ---------- */
 ipcMain.handle('google:status', () => {
   const tokens = loadTokens();
@@ -189,6 +287,31 @@ ipcMain.handle('drive:get', async (_e, opts) => {
   const tokens = loadTokens();
   if (!cfg || !tokens) throw new Error('Not connected.');
   return GoogleDrive.getFileContent(cfg, tokens, opts || {}, (next) => saveTokens({ ...tokens, ...next }));
+});
+
+/* ---------- IPC: PDF text extraction ----------
+ *
+ * The renderer holds task sheets / scaffolds as base64 data URLs. Pulling
+ * the text out needs a PDF parser, which only runs in Node — so the renderer
+ * hands the data URL (or bare base64) over here and gets plain text back for
+ * the Study view's AI analysis. `pdf-parse` injects "-- N of M --" page
+ * separators; we strip those and bound the output so a huge PDF can't blow up
+ * the prompt.
+ */
+ipcMain.handle('pdf:extract', async (_e, dataUrlOrB64) => {
+  if (!dataUrlOrB64) return { text: '', pages: 0 };
+  let b64 = String(dataUrlOrB64);
+  const comma = b64.indexOf(',');
+  if (b64.startsWith('data:') && comma !== -1) b64 = b64.slice(comma + 1);
+  const buf = Buffer.from(b64, 'base64');
+  if (!buf.length) return { text: '', pages: 0 };
+  const { PDFParse } = require('pdf-parse');
+  const parser = new PDFParse({ data: new Uint8Array(buf) });
+  try {
+    const res = await parser.getText();
+    const text = (res.text || '').replace(/\n*-- \d+ of \d+ --\n*/g, '\n').replace(/\n{3,}/g, '\n\n').trim();
+    return { text: text.slice(0, 20000), pages: res.total || 0 };
+  } finally { try { await parser.destroy(); } catch {} }
 });
 
 /* ---------- IPC: open external links from the renderer ---------- */

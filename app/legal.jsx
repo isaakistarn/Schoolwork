@@ -11,27 +11,42 @@
 const Legal = (() => {
   const { useState, useEffect } = React;
 
-  // Minimal, safe Markdown-ish renderer (headings, lists, quotes, rules, bold).
+  // Minimal, safe Markdown-ish renderer: headings, ordered/unordered lists,
+  // quotes, rules, and inline **bold**, *italic* and `code`.
   const renderInline = (text, keyBase) => {
-    const parts = text.split(/(\*\*[^*]+\*\*)/g);
-    return parts.map((p, i) =>
-      /^\*\*[^*]+\*\*$/.test(p)
-        ? <b key={keyBase + "-" + i}>{p.slice(2, -2)}</b>
-        : <React.Fragment key={keyBase + "-" + i}>{p}</React.Fragment>
-    );
+    const tokens = String(text).split(/(\*\*[^*]+\*\*|`[^`]+`|\*[^*]+\*)/g);
+    return tokens.map((p, i) => {
+      const key = keyBase + "-" + i;
+      if (/^\*\*[^*]+\*\*$/.test(p)) return <b key={key}>{p.slice(2, -2)}</b>;
+      if (/^`[^`]+`$/.test(p))       return <code key={key}>{p.slice(1, -1)}</code>;
+      if (/^\*[^*]+\*$/.test(p))     return <em key={key}>{p.slice(1, -1)}</em>;
+      return <React.Fragment key={key}>{p}</React.Fragment>;
+    });
   };
 
   const Markdown = ({ text }) => {
     const lines = (text || "").split("\n");
     const out = [];
-    let list = null;
-    const flush = () => { if (list) { out.push(<ul key={"ul" + out.length}>{list}</ul>); list = null; } };
+    let list = null, listType = "ul";
+    const flush = () => {
+      if (!list) return;
+      out.push(listType === "ol" ? <ol key={"ol" + out.length}>{list}</ol> : <ul key={"ul" + out.length}>{list}</ul>);
+      list = null;
+    };
     lines.forEach((ln, i) => {
-      if (/^\s*[-*]\s+/.test(ln)) { (list = list || []).push(<li key={i}>{renderInline(ln.replace(/^\s*[-*]\s+/, ""), "li" + i)}</li>); return; }
+      if (/^\s*[-*]\s+/.test(ln)) {
+        if (list && listType !== "ul") flush();
+        listType = "ul"; (list = list || []).push(<li key={i}>{renderInline(ln.replace(/^\s*[-*]\s+/, ""), "li" + i)}</li>); return;
+      }
+      if (/^\s*\d+\.\s+/.test(ln)) {
+        if (list && listType !== "ol") flush();
+        listType = "ol"; (list = list || []).push(<li key={i}>{renderInline(ln.replace(/^\s*\d+\.\s+/, ""), "li" + i)}</li>); return;
+      }
       flush();
-      if (ln.startsWith("# ")) out.push(<h1 key={i}>{ln.slice(2)}</h1>);
-      else if (ln.startsWith("## ")) out.push(<h2 key={i}>{ln.slice(3)}</h2>);
+      if (ln.startsWith("#### ")) out.push(<h3 key={i}>{ln.slice(5)}</h3>);
       else if (ln.startsWith("### ")) out.push(<h3 key={i}>{ln.slice(4)}</h3>);
+      else if (ln.startsWith("## ")) out.push(<h2 key={i}>{ln.slice(3)}</h2>);
+      else if (ln.startsWith("# ")) out.push(<h1 key={i}>{ln.slice(2)}</h1>);
       else if (ln.startsWith("> ")) out.push(<blockquote key={i}>{renderInline(ln.slice(2), "q" + i)}</blockquote>);
       else if (/^---+$/.test(ln.trim())) out.push(<hr key={i} />);
       else if (ln.trim().startsWith("|")) out.push(<div key={i} className="legal-table-row">{ln}</div>);
@@ -73,7 +88,7 @@ const Legal = (() => {
     );
   };
 
-  return { LegalModal, TITLES };
+  return { LegalModal, TITLES, Markdown };
 })();
 
 window.Legal = Legal;

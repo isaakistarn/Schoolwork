@@ -43,6 +43,23 @@ contextBridge.exposeInMainWorld('schoolworkAPI', {
     purgeEvents:      (calendarId)                 => ipcRenderer.invoke('google:purge-events', { calendarId }),
   },
 
+  // OpenAI: the API key is stored encrypted in the main process; the renderer
+  // only sets/clears it and asks the main process to run analyses. Per-account
+  // (scoped by setAccount), like the Google credentials.
+  openai: {
+    getConfig:  ()     => ipcRenderer.invoke('openai:get-config'),
+    setConfig:  (cfg)  => ipcRenderer.invoke('openai:set-config', cfg),
+    clear:      ()     => ipcRenderer.invoke('openai:clear'),
+    listModels: ()     => ipcRenderer.invoke('openai:list-models'),
+    analyze:    (opts) => ipcRenderer.invoke('openai:analyze', opts),
+  },
+
+  // Extract plain text from a PDF (base64 data URL or bare base64) for AI
+  // analysis of task sheets / scaffolds. Runs in the main process.
+  pdf: {
+    extract: (data) => ipcRenderer.invoke('pdf:extract', data),
+  },
+
   openExternal: (url) => ipcRenderer.invoke('shell:open', url),
 
   legal: {

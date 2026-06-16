@@ -368,7 +368,7 @@ const CalEditor = ({ mode, data, onClose, pushToast }) => {
   const { courses, calendars, addClass, updateClass, removeClass, addEvent, updateEvent, removeEvent } = useStore();
   const isEdit = !!data?.id;
   const [form, setForm] = useState(() => mode === "class"
-    ? { day: data?.day ?? 0, start: data?.start || "09:00", end: data?.end || "10:00", title: data?.title || "", course: data?.course || courses[0]?.id || "", kind: data?.kind || "lecture", room: data?.room || "" }
+    ? { day: data?.day ?? 0, start: data?.start || "09:00", end: data?.end || "10:00", title: data?.title || "", course: data?.course || courses[0]?.id || "", room: data?.room || "" }
     : { date: data?.date || isoDate(new Date()), start: data?.start || "12:00", end: data?.end || "13:00", title: data?.title || "", calendarId: data?.calendarId || calendars[0]?.id, course: data?.course || "", notes: data?.notes || "" }
   );
   const set = (k, v) => setForm(f => ({ ...f, [k]: v }));
@@ -416,14 +416,7 @@ const CalEditor = ({ mode, data, onClose, pushToast }) => {
                 <input className="input" type="date" value={form.date} onChange={e => set("date", e.target.value)} />
               </div>
             )}
-            {mode === "class" ? (
-              <div className="field"><label>Kind</label>
-                <select className="select" value={form.kind} onChange={e => set("kind", e.target.value)}>
-                  <option value="lecture">Lecture</option><option value="lab">Lab / Practical</option>
-                  <option value="study">Study block</option><option value="office">Office hours</option>
-                </select>
-              </div>
-            ) : (
+            {mode === "event" && (
               <div className="field"><label>Calendar</label>
                 <select className="select" value={form.calendarId} onChange={e => set("calendarId", e.target.value)}>
                   {calendars.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
@@ -2202,6 +2195,7 @@ const SettingsView = ({ tweaks, setTweak, pushToast, onLogout }) => {
             <>
               <window.GoogleConnector.Panel pushToast={pushToast} />
               <window.GoogleConnector.DrivePanel pushToast={pushToast} />
+              <window.GoogleConnector.OpenAIPanel pushToast={pushToast} />
             </>
           )}
 
@@ -2725,4 +2719,541 @@ const TotalGradesView = () => {
   );
 };
 
-window.Views = { Dashboard, CoursesView, CalendarView, NotesView, GradesView, TotalGradesView, CourseDetail, Inspector, SettingsView, LibraryView, Onboarding };
+/* ============================================================
+   Study — session logging, progress measurement & "what to do next"
+   ----------------------------------------------------------------
+   Three things in one screen:
+     1. Log a study block (time + optional subject/assignment/progress).
+     2. See progress on every open assignment vs its deadline.
+     3. Recommendations: a local engine ranks open tasks by how far
+        behind pace they are; "Analyse with AI" sends the same picture
+        plus any uploaded task sheets / scaffolds to OpenAI for a richer
+        plan (requires a key in Settings → Connectors).
+   ============================================================ */
+const SEVERITY_TONE = { overdue: "error", high: "warning", med: "info", low: "neutral" };
+const SEVERITY_LABEL = { overdue: "Overdue", high: "Behind", med: "On pace", low: "Comfortable" };
+
+/* The "Analyse with AI" picker: choose a subject focus, a question, and which
+   materials (task sheets / scaffolds) — plus whether to include progress — go
+   to OpenAI. Nothing runs until the student presses Analyse. */
+const ANALYZE_KIND_LABEL = { pdf: "PDF", doc: "DOC", md: "TXT", sheet: "XLS", image: "IMG", code: "CODE" };
+const AnalyzeModal = ({ courses, materials, defaultCourse, onClose, onRun }) => {
+  const [courseId, setCourseId] = useState(defaultCourse || "");
+  const [question, setQuestion] = useState("");
+  const [includeProgress, setIncludeProgress] = useState(true);
+  const [selected, setSelected] = useState(() => new Set());
+
+  useEffect(() => {
+    const h = (e) => { if (e.key === "Escape") onClose(); };
+    window.addEventListener("keydown", h);
+    return () => window.removeEventListener("keydown", h);
+  }, [onClose]);
+
+  // Show this subject's materials plus any uncategorised ones.
+  const visible = materials.filter(m => !courseId || m.courseId === courseId || m.courseId == null);
+  const toggle = (k) => setSelected(s => { const n = new Set(s); n.has(k) ? n.delete(k) : n.add(k); return n; });
+  const chosenFiles = materials.filter(m => selected.has(m.key));
+  const canRun = includeProgress || chosenFiles.length > 0 || question.trim().length > 0;
+
+  return (
+    <div className="modal-overlay" onClick={onClose} role="dialog" aria-modal="true">
+      <div className="modal" onClick={e => e.stopPropagation()} style={{ width: 560, maxHeight: "84vh", display: "flex", flexDirection: "column" }}>
+        <div className="modal-h">
+          <div><h2>Analyse with AI</h2><div style={{ fontSize: 12, color: "var(--fg-tertiary)" }}>Choose what to analyse — a subject, a question, and the materials to read.</div></div>
+          <button className="iconbtn" onClick={onClose} aria-label="Close"><Icon name="close" /></button>
+        </div>
+        <div className="modal-b" style={{ display: "flex", flexDirection: "column", gap: 14, overflowY: "auto" }}>
+          <div className="field"><label>Focus subject</label>
+            <select className="select" value={courseId} onChange={e => { setCourseId(e.target.value); setSelected(new Set()); }}>
+              <option value="">All subjects</option>
+              {courses.map(c => <option key={c.id} value={c.id}>{c.code} — {c.title}</option>)}
+            </select>
+          </div>
+          <div className="field"><label>What do you want to know? (optional)</label>
+            <textarea className="textarea" rows={2} value={question} placeholder="e.g. How is my English going and what should I work on next?" onChange={e => setQuestion(e.target.value)} />
+          </div>
+          <label style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 13 }}>
+            <input type="checkbox" checked={includeProgress} onChange={e => setIncludeProgress(e.target.checked)} />
+            Include my progress, deadlines &amp; study log
+          </label>
+          <div>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 6 }}>
+              <label style={{ fontSize: 13, fontWeight: 500 }}>Materials to analyse {chosenFiles.length ? `(${chosenFiles.length} selected)` : ""}</label>
+              {visible.length > 0 && (
+                <div style={{ display: "flex", gap: 8 }}>
+                  <button className="btn btn-tertiary btn-sm" onClick={() => setSelected(new Set(visible.map(m => m.key)))}>Select all</button>
+                  <button className="btn btn-tertiary btn-sm" onClick={() => setSelected(new Set())}>Clear</button>
+                </div>
+              )}
+            </div>
+            <div style={{ border: "1px solid var(--bd-default)", borderRadius: 6, overflow: "hidden", maxHeight: 220, overflowY: "auto" }}>
+              {visible.length === 0
+                ? <div style={{ padding: 14, fontSize: 12.5, color: "var(--fg-tertiary)" }}>No readable task sheets or scaffolds {courseId ? "for this subject " : ""}yet. Upload PDFs or text files in the Library or onto an assignment, then analyse them here.</div>
+                : visible.map((m, i) => (
+                  <label key={m.key} style={{ display: "flex", alignItems: "center", gap: 10, padding: "8px 12px", borderTop: i ? "1px solid var(--bd-subtle)" : "none", fontSize: 13, cursor: "pointer" }}>
+                    <input type="checkbox" checked={selected.has(m.key)} onChange={() => toggle(m.key)} />
+                    <span className="badge neutral" style={{ fontSize: 10 }}>{ANALYZE_KIND_LABEL[m.kind] || "FILE"}</span>
+                    <div style={{ flex: 1, minWidth: 0 }}>
+                      <div style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{m.name}</div>
+                      <div style={{ fontSize: 11, color: "var(--fg-tertiary)" }}>{m.where}</div>
+                    </div>
+                  </label>
+                ))}
+            </div>
+          </div>
+        </div>
+        <div className="modal-f">
+          <button className="btn btn-tertiary" onClick={onClose}>Cancel</button>
+          <button className="btn btn-primary" disabled={!canRun} onClick={() => onRun({ courseId, question, files: chosenFiles, includeProgress })}>
+            <Icon name="spark" size={14} /> Analyse{chosenFiles.length ? ` ${chosenFiles.length} item${chosenFiles.length === 1 ? "" : "s"}` : ""}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+};
+
+const StudyView = ({ pushToast, onOpen, onNavigate }) => {
+  const { useStore } = window.Store;
+  const {
+    assignments, courses, sessions, library, attachments, aiHistory,
+    addSession, removeSession, updateAssignment, addAiRun, courseById, workspaceName,
+  } = useStore();
+  const { fmt, Progress } = window.UI;
+  const seed = window.SchoolworkData;
+  const api = (typeof window !== "undefined") ? window.schoolworkAPI : null;
+  const { account } = window.Auth.useAuth();
+
+  const open = useMemo(
+    () => assignments.filter(a => a.status !== "graded" && a.status !== "submitted"),
+    [assignments]
+  );
+  const recs = useMemo(() => seed.studyRecommendations(assignments, sessions), [assignments, sessions]);
+  const weekly = useMemo(() => seed.weeklyStudyMinutes(sessions), [sessions]);
+
+  /* ---------- session logger ---------- */
+  const [form, setForm] = useState(() => ({
+    course: courses[0]?.id || "", assignment: "", minutes: 30,
+    date: isoDate(new Date()), note: "", progress: "",
+  }));
+  const set = (k, v) => setForm(f => ({ ...f, [k]: v }));
+  // When an assignment is picked, pre-fill the subject + current progress.
+  const pickAssignment = (id) => {
+    const a = assignments.find(x => x.id === id);
+    setForm(f => ({ ...f, assignment: id, course: a ? a.course : f.course, progress: a ? String(Math.round(seed.assignmentProgress(a))) : "" }));
+  };
+
+  const logSession = () => {
+    const mins = Number(form.minutes) || 0;
+    if (mins <= 0) { pushToast?.({ tone: "warning", title: "Enter a study time", body: "How many minutes did you study?" }); return; }
+    addSession({ course: form.course || null, assignment: form.assignment || null, minutes: mins, date: form.date, note: form.note.trim() });
+    if (form.assignment) {
+      const a = assignments.find(x => x.id === form.assignment);
+      const patch = {};
+      if (a && a.status === "not_started") patch.status = "in_progress";
+      if (form.progress !== "" && !isNaN(Number(form.progress))) patch.progress = Math.max(0, Math.min(100, Number(form.progress)));
+      if (Object.keys(patch).length) updateAssignment(form.assignment, patch);
+    }
+    pushToast?.({ tone: "success", title: "Study logged", body: fmt.duration(mins) + (form.assignment ? " on this task" : "") + "." });
+    setForm(f => ({ ...f, minutes: 30, note: "", progress: form.assignment ? f.progress : "" }));
+  };
+
+  /* ---------- AI analysis ---------- */
+  const [aiReady, setAiReady] = useState(false);
+  const [aiBusy, setAiBusy] = useState(false);
+  const [aiOut, setAiOut] = useState(null);
+  const [aiMeta, setAiMeta] = useState(null);        // { subject, fileCount }
+  const [analyzeOpen, setAnalyzeOpen] = useState(false);
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try { await api?.setAccount?.(account?.id); const c = await api?.openai?.getConfig?.(); if (!cancelled) setAiReady(!!c?.hasKey); }
+      catch { if (!cancelled) setAiReady(false); }
+    })();
+    return () => { cancelled = true; };
+  }, [account]);
+
+  // Materials the student can choose to analyse: anything we hold as text,
+  // plus PDFs we can extract. Each carries its subject so the modal can filter.
+  const materials = useMemo(() => {
+    const readable = (f) => (typeof f.body === "string" && f.body.trim()) || (f.kind === "pdf" && f.dataUrl);
+    const out = [];
+    (library || []).forEach(f => {
+      if (readable(f)) out.push({ key: "L:" + f.id, name: f.name, kind: f.kind, courseId: f.course || null, body: typeof f.body === "string" ? f.body : null, dataUrl: f.kind === "pdf" ? f.dataUrl : null, where: "Library" });
+    });
+    Object.entries(attachments || {}).forEach(([aid, arr]) => {
+      const a = assignments.find(x => x.id === aid);
+      (arr || []).forEach((f, idx) => {
+        if (readable(f)) out.push({ key: "A:" + aid + ":" + idx, name: f.name, kind: f.kind, courseId: a ? a.course : null, body: typeof f.body === "string" ? f.body : null, dataUrl: f.kind === "pdf" ? f.dataUrl : null, where: a ? a.title : "Attachment" });
+      });
+    });
+    return out;
+  }, [library, attachments, assignments]);
+
+  const openAnalyze = () => {
+    if (!api?.openai) { pushToast?.({ tone: "warning", title: "Desktop only", body: "AI analysis runs in the desktop app." }); return; }
+    if (!aiReady) { pushToast?.({ tone: "warning", title: "Add an OpenAI key", body: "Set one up in Settings → Connectors." }); return; }
+    setAnalyzeOpen(true);
+  };
+
+  // Run an analysis from the modal's selection: a subject focus, a free-text
+  // question, the chosen materials, and whether to include progress/deadlines.
+  const runAnalysis = async ({ courseId, question, files, includeProgress }) => {
+    setAnalyzeOpen(false);
+    setAiBusy(true); setAiOut(null);
+    const courseName = courseId ? (courseById(courseId)?.title || courseById(courseId)?.code) : null;
+    setAiMeta({ subject: courseName || "All subjects", fileCount: files.length, usage: null });
+    try {
+      await api.setAccount?.(account?.id);
+      const scoped = courseId ? recs.filter(r => r.assignment.course === courseId) : recs;
+      const lines = scoped.slice(0, 14).map(r => {
+        const c = courseById(r.assignment.course);
+        const metric = r.exam ? `${Math.round(r.progress)}% confident` : `${Math.round(r.progress)}% done`;
+        return `- ${r.assignment.title} [${c?.code || "?"}] ${r.exam ? "EXAM" : r.assignment.type}, due ${String(r.assignment.due).slice(0, 10)}, ${metric}, est ${r.est}min, logged ${r.logged}min, ${Math.round(r.days)} days left`;
+      }).join("\n");
+
+      // Read each selected material — text body, or extract PDF text. Label
+      // each with its filename so the model can tell a draft from a task sheet.
+      const docs = [];
+      let readCount = 0;
+      for (const f of files) {
+        if (f.body && f.body.trim()) { docs.push(`### ${f.name}\n${f.body.slice(0, 4000)}`); readCount++; }
+        else if (f.dataUrl && api.pdf?.extract) {
+          try { const r = await api.pdf.extract(f.dataUrl); if (r && r.text && r.text.trim()) { docs.push(`### ${f.name} (PDF)\n${r.text.slice(0, 4000)}`); readCount++; } } catch { /* skip */ }
+        }
+      }
+      const docText = docs.join("\n\n").slice(0, 16000);
+      // If the student picked files but none yielded text, say so — otherwise
+      // it looks like the AI ignored them.
+      if (files.length && readCount === 0) {
+        pushToast?.({ tone: "warning", title: "Couldn't read those files", body: "They may be scanned images or an unsupported format (only PDFs and text are read)." });
+      }
+
+      const hasDocs = docText.length > 0;
+      const hasQ = !!(question && question.trim());
+
+      const system = "You are a study coach and assessor for a Queensland senior-secondary (QCE) student. When the student provides materials (e.g. a draft and a task sheet), give specific, evidence-based feedback: quote or reference particular parts of those materials, and if a draft is included assess it against the task sheet's criteria with concrete improvements. Always answer the student's question directly and first. Be concrete and encouraging. Reply in clean markdown — short headings with bullet and numbered lists — and suggest realistic time blocks. Treat items marked EXAM as revision tracked by a confidence score.";
+      const prompt = [
+        hasQ ? `The student's question:\n"${question.trim()}"` : "The student didn't ask a specific question — give a focused study plan.",
+        courseName ? `Subject in focus: ${courseName}.` : "Looking across all subjects.",
+        `Today is ${new Date().toISOString().slice(0, 10)}. Study logged in the last 7 days: ${weekly} minutes.`,
+        includeProgress ? `\n## Assignments, progress & deadlines (most pressing first)\n${lines || "(none open)"}` : "",
+        hasDocs ? `\n## Materials the student uploaded — analyse these directly\n${docText}` : "",
+        "",
+        "## What to produce",
+        hasQ ? "- First, directly answer the student's question." : "",
+        hasDocs ? "- Give specific feedback on the uploaded materials: reference particular sections by name, and if a draft is included, assess it against any task sheet / marking criteria provided and list concrete improvements." : "",
+        "- Then a prioritised \"Do next\" numbered list (max 5 items) with suggested time blocks.",
+        "- End with a one-line encouragement.",
+      ].filter(Boolean).join("\n");
+
+      const res = await api.openai.analyze({ system, prompt });
+      const out = res.text || "(no response)";
+      setAiOut(out);
+      setAiMeta({ subject: courseName || "All subjects", fileCount: files.length, readCount, usage: res.usage || null });
+      addAiRun({
+        subject: courseName || "All subjects",
+        question: hasQ ? question.trim() : "",
+        model: res.model || null,
+        fileCount: files.length,
+        readCount,
+        fileNames: files.map(f => f.name),
+        tokens: res.usage || null,
+        output: out,
+      });
+    } catch (e) {
+      pushToast?.({ tone: "warning", title: "AI analysis failed", body: e.message });
+      setAiOut(null); setAiMeta(null);
+    } finally { setAiBusy(false); }
+  };
+
+  // Severity wording differs for exams (confidence) vs other tasks (progress).
+  const sevLabel = (r) => r.exam
+    ? ({ overdue: "Past", high: "Under-prepared", med: "Getting ready", low: "Ready" }[r.severity] || "")
+    : (SEVERITY_LABEL[r.severity] || "");
+
+  /* ---------- empty term ---------- */
+  if (courses.length === 0) {
+    return (
+      <>
+        <div className="page-header"><div><div className="breadcrumb">Workspace · {workspaceName}</div><h1>Study</h1></div></div>
+        <div className="content">
+          <div className="empty" style={{ background: "var(--bg-surface)", border: "1px solid var(--bd-default)", borderRadius: 6, padding: "var(--s-10)" }}>
+            <div className="empty-icon"><Icon name="target" /></div>
+            <h3>Add your subjects first</h3>
+            <p>Once you have subjects and assignments in this term, log study sessions here and get recommendations on what to do next.</p>
+          </div>
+        </div>
+      </>
+    );
+  }
+
+  const recentSessions = sessions.slice(0, 8);
+  const totalToday = seed.studyMinutes(sessions.filter(s => s.date === isoDate(new Date())));
+
+  return (
+    <>
+      <div className="page-header">
+        <div><div className="breadcrumb">Workspace · {workspaceName}</div><h1>Study</h1></div>
+        <div className="actions">
+          <button className="btn btn-secondary" onClick={() => onNavigate?.("ai-history")} title="AI analysis history & token usage">
+            <Icon name="clock" size={14} /> History{aiHistory.length ? ` (${aiHistory.length})` : ""}
+          </button>
+          <button className="btn btn-primary" onClick={openAnalyze} disabled={aiBusy} title={aiReady ? "Choose what to analyse with OpenAI" : "Add an OpenAI key in Settings → Connectors"}>
+            <Icon name="spark" size={14} /> {aiBusy ? "Analysing…" : "Analyse with AI"}
+          </button>
+        </div>
+      </div>
+
+      <div className="content" style={{ display: "grid", gridTemplateColumns: "1.3fr 1fr", gap: "var(--s-6)", alignItems: "start", overflowY: "auto" }}>
+
+        {/* ---- LEFT: recommendations + AI ---- */}
+        <div style={{ display: "flex", flexDirection: "column", gap: "var(--s-5)" }}>
+          <section style={{ background: "var(--bg-surface)", border: "1px solid var(--bd-default)", borderRadius: 6, padding: "var(--s-5)" }}>
+            <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 4 }}>
+              <Icon name="target" size={18} />
+              <h2 style={{ margin: 0, fontSize: 16, fontWeight: 600 }}>What to do next</h2>
+            </div>
+            <p style={{ margin: "2px 0 14px", fontSize: 12, color: "var(--fg-tertiary)" }}>
+              Ranked from your logged study time and progress against each deadline.
+            </p>
+            {recs.length === 0
+              ? <div style={{ fontSize: 13, color: "var(--fg-tertiary)", padding: "8px 0" }}>Nothing open with a due date — you're all caught up. 🎉</div>
+              : recs.slice(0, 6).map(r => {
+                const c = courseById(r.assignment.course);
+                const du = fmt.daysUntil(r.assignment.due, false);
+                return (
+                  <div key={r.id} style={{ display: "flex", gap: 12, padding: "10px 0", borderTop: "1px solid var(--bd-subtle)" }}>
+                    <span className="dot" style={{ background: c?.color || "var(--accent)", marginTop: 5 }} />
+                    <div style={{ flex: 1, minWidth: 0 }}>
+                      <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+                        <button className="linklike" style={{ fontWeight: 600, fontSize: 13, background: "none", border: "none", padding: 0, color: "var(--fg-primary)", cursor: onOpen ? "pointer" : "default" }} onClick={() => onOpen?.(r.assignment.id)}>{r.assignment.title}</button>
+                        <span className="badge neutral" style={{ fontSize: 11 }}>{c?.code || "—"}</span>
+                        {r.exam && <span className="badge info" style={{ fontSize: 11 }}>Exam</span>}
+                        <span className={"badge " + (SEVERITY_TONE[r.severity] || "neutral")} style={{ fontSize: 11 }}>{sevLabel(r)}</span>
+                        <span className={"badge " + du.tone} style={{ fontSize: 11 }}>{du.label}</span>
+                      </div>
+                      <div style={{ fontSize: 12.5, color: "var(--fg-secondary)", margin: "4px 0 6px" }}>{seed.recMessage(r)}</div>
+                      <Progress value={r.progress} tone={r.severity === "overdue" || r.severity === "high" ? "warning" : undefined} />
+                    </div>
+                  </div>
+                );
+              })}
+          </section>
+
+          {(aiBusy || aiOut) && (
+            <section style={{ background: "var(--bg-surface)", border: "1px solid var(--bd-default)", borderRadius: 6, padding: "var(--s-5)" }}>
+              <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 4 }}>
+                <Icon name="spark" size={18} />
+                <h2 style={{ margin: 0, fontSize: 16, fontWeight: 600 }}>AI study plan</h2>
+              </div>
+              {aiMeta && <p style={{ margin: "0 0 10px", fontSize: 12, color: "var(--fg-tertiary)" }}>{aiMeta.subject}{aiMeta.fileCount ? ` · ${aiMeta.readCount != null ? aiMeta.readCount : aiMeta.fileCount}/${aiMeta.fileCount} material${aiMeta.fileCount === 1 ? "" : "s"} read` : ""}{aiMeta.usage ? ` · ${aiMeta.usage.total} tokens` : ""}</p>}
+              {aiBusy
+                ? <div style={{ fontSize: 13, color: "var(--fg-tertiary)" }}>Reading your selected materials and workload…</div>
+                : (window.Legal?.Markdown ? <window.Legal.Markdown text={aiOut} /> : <div style={{ fontSize: 13, color: "var(--fg-secondary)", whiteSpace: "pre-wrap", lineHeight: 1.55 }}>{aiOut}</div>)}
+              {!aiBusy && aiOut && <p style={{ fontSize: 11, color: "var(--fg-tertiary)", marginTop: 12 }}>Generated by OpenAI from what you selected. Always use your own judgement.</p>}
+            </section>
+          )}
+
+          {/* ---- progress (and exam confidence) on open assignments ---- */}
+          <section style={{ background: "var(--bg-surface)", border: "1px solid var(--bd-default)", borderRadius: 6, padding: "var(--s-5)" }}>
+            <h2 style={{ margin: "0 0 4px", fontSize: 16, fontWeight: 600 }}>Progress &amp; exam confidence</h2>
+            <p style={{ margin: "2px 0 12px", fontSize: 12, color: "var(--fg-tertiary)" }}>Drag to set how done each task is — for exams it's how <b>confident</b> you feel. This feeds the recommendations above.</p>
+            {open.length === 0
+              ? <div style={{ fontSize: 13, color: "var(--fg-tertiary)" }}>No open assignments in this term.</div>
+              : open.map(a => {
+                const c = courseById(a.course);
+                const exam = seed.isExam(a);
+                const prog = Math.round(seed.assignmentProgress(a));
+                const du = fmt.daysUntil(a.due, false);
+                return (
+                  <div key={a.id} style={{ display: "grid", gridTemplateColumns: "1fr 150px 64px", gap: 12, alignItems: "center", padding: "9px 0", borderTop: "1px solid var(--bd-subtle)" }}>
+                    <div style={{ minWidth: 0 }}>
+                      <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                        <span className="dot" style={{ background: c?.color || "var(--accent)" }} />
+                        <span style={{ fontSize: 13, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{a.title}</span>
+                        {exam && <span className="badge info" style={{ fontSize: 10 }}>Exam</span>}
+                      </div>
+                      {a.due && <div style={{ fontSize: 11, color: "var(--fg-tertiary)", marginLeft: 16 }}>{c?.code || ""}{a.due ? " · " + du.label : ""}</div>}
+                    </div>
+                    <input type="range" min="0" max="100" step="5" value={prog} title={exam ? "Confidence" : "Progress"} onChange={(e) => updateAssignment(a.id, { progress: Number(e.target.value) })} style={{ width: "100%" }} />
+                    <span style={{ fontSize: 13, textAlign: "right", color: "var(--fg-secondary)" }}>{prog}%<div style={{ fontSize: 9, color: "var(--fg-tertiary)", textTransform: "uppercase", letterSpacing: ".04em" }}>{exam ? "conf." : "done"}</div></span>
+                  </div>
+                );
+              })}
+          </section>
+        </div>
+
+        {/* ---- RIGHT: logger + weekly + recent ---- */}
+        <div style={{ display: "flex", flexDirection: "column", gap: "var(--s-5)" }}>
+          <section style={{ background: "var(--bg-surface)", border: "1px solid var(--bd-default)", borderRadius: 6, padding: "var(--s-5)" }}>
+            <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 12 }}>
+              <Icon name="clock" size={18} />
+              <h2 style={{ margin: 0, fontSize: 16, fontWeight: 600 }}>Log a study session</h2>
+            </div>
+            <div className="field" style={{ marginBottom: 10 }}><label>Assignment (optional)</label>
+              <select className="select" value={form.assignment} onChange={(e) => pickAssignment(e.target.value)}>
+                <option value="">— general study —</option>
+                {open.map(a => <option key={a.id} value={a.id}>{(courseById(a.course)?.code || "") + " · " + a.title}</option>)}
+              </select>
+            </div>
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
+              <div className="field"><label>Subject</label>
+                <select className="select" value={form.course} onChange={(e) => set("course", e.target.value)}>
+                  <option value="">— none —</option>
+                  {courses.map(c => <option key={c.id} value={c.id}>{c.code}</option>)}
+                </select>
+              </div>
+              <div className="field"><label>Date</label>
+                <input className="input" type="date" value={form.date} onChange={(e) => set("date", e.target.value)} />
+              </div>
+              <div className="field"><label>Minutes studied</label>
+                <input className="input" type="number" min="0" step="5" value={form.minutes} onChange={(e) => set("minutes", e.target.value)} />
+              </div>
+              {form.assignment && (
+                <div className="field"><label>{seed.isExam(assignments.find(x => x.id === form.assignment)) ? "Confidence now (%)" : "Progress now (%)"}</label>
+                  <input className="input" type="number" min="0" max="100" step="5" value={form.progress} placeholder="—" onChange={(e) => set("progress", e.target.value)} />
+                </div>
+              )}
+            </div>
+            <div className="field" style={{ marginTop: 10 }}><label>Note (optional)</label>
+              <input className="input" value={form.note} placeholder="What did you cover?" onChange={(e) => set("note", e.target.value)} />
+            </div>
+            <button className="btn btn-primary" style={{ marginTop: 12, width: "100%" }} onClick={logSession}><Icon name="plus" size={14} /> Log session</button>
+          </section>
+
+          <section style={{ background: "var(--bg-surface)", border: "1px solid var(--bd-default)", borderRadius: 6, padding: "var(--s-5)" }}>
+            <h2 style={{ margin: "0 0 12px", fontSize: 16, fontWeight: 600 }}>This week</h2>
+            <div className="settings-stats">
+              <div className="stat"><span className="stat-label">Logged (7 days)</span><span className="stat-value">{fmt.duration(weekly)}</span><span className="stat-delta">{sessions.length} session{sessions.length === 1 ? "" : "s"} total</span></div>
+              <div className="stat"><span className="stat-label">Today</span><span className="stat-value">{fmt.duration(totalToday)}</span><span className="stat-delta">{open.length} open task{open.length === 1 ? "" : "s"}</span></div>
+            </div>
+          </section>
+
+          <section style={{ background: "var(--bg-surface)", border: "1px solid var(--bd-default)", borderRadius: 6, padding: "var(--s-5)" }}>
+            <h2 style={{ margin: "0 0 8px", fontSize: 16, fontWeight: 600 }}>Recent sessions</h2>
+            {recentSessions.length === 0
+              ? <div style={{ fontSize: 13, color: "var(--fg-tertiary)" }}>No sessions logged yet.</div>
+              : recentSessions.map(s => {
+                const a = s.assignment ? assignments.find(x => x.id === s.assignment) : null;
+                const c = courseById(s.course);
+                return (
+                  <div key={s.id} style={{ display: "flex", alignItems: "center", gap: 10, padding: "8px 0", borderTop: "1px solid var(--bd-subtle)" }}>
+                    <span className="dot" style={{ background: c?.color || "var(--bd-strong)" }} />
+                    <div style={{ flex: 1, minWidth: 0 }}>
+                      <div style={{ fontSize: 13, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{a ? a.title : (c?.code || "General study")}</div>
+                      <div style={{ fontSize: 11, color: "var(--fg-tertiary)" }}>{fmt.dateLong(s.date)}{s.note ? " · " + s.note : ""}</div>
+                    </div>
+                    <span style={{ fontSize: 12, color: "var(--fg-secondary)" }}>{fmt.duration(s.minutes)}</span>
+                    <button className="iconbtn" style={{ width: 24, height: 24 }} aria-label="Remove session" onClick={() => { removeSession(s.id); pushToast?.({ tone: "warning", title: "Session removed" }); }}><Icon name="trash" size={13} /></button>
+                  </div>
+                );
+              })}
+          </section>
+        </div>
+      </div>
+
+      {analyzeOpen && (
+        <AnalyzeModal
+          courses={courses}
+          materials={materials}
+          defaultCourse=""
+          onClose={() => setAnalyzeOpen(false)}
+          onRun={runAnalysis}
+        />
+      )}
+    </>
+  );
+};
+
+/* ============================================================
+   AI history & usage — its own page (reached from the Study view).
+   Master list of past analyses on the left, full plan + token usage
+   for the selected run on the right.
+   ============================================================ */
+const AiHistoryView = ({ pushToast, onNavigate }) => {
+  const { useStore } = window.Store;
+  const { aiHistory, clearAiHistory, workspaceName } = useStore();
+  const [selId, setSelId] = useState(aiHistory[0]?.id || null);
+  const selected = aiHistory.find(r => r.id === selId) || aiHistory[0] || null;
+
+  const tokens = (aiHistory || []).reduce((acc, r) => ({
+    prompt: acc.prompt + (r.tokens?.prompt || 0),
+    completion: acc.completion + (r.tokens?.completion || 0),
+    total: acc.total + (r.tokens?.total || 0),
+  }), { prompt: 0, completion: 0, total: 0 });
+  const fmtClock = (iso) => { const d = new Date(iso); return isNaN(d) ? "" : d.toLocaleString(undefined, { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" }); };
+
+  return (
+    <>
+      <div className="page-header">
+        <div>
+          <div className="breadcrumb">Workspace · {workspaceName} · Study</div>
+          <h1>AI history &amp; usage</h1>
+        </div>
+        <div className="actions">
+          {aiHistory.length > 0 && (
+            <button className="btn btn-tertiary" style={{ color: "var(--error)" }} onClick={() => { if (confirm("Clear all AI analysis history for this term?")) { clearAiHistory(); setSelId(null); pushToast?.({ tone: "warning", title: "History cleared" }); } }}>
+              <Icon name="trash" size={14} /> Clear history
+            </button>
+          )}
+          <button className="btn btn-secondary" onClick={() => onNavigate?.("study")}><Icon name="chevron-left" size={14} /> Back to Study</button>
+        </div>
+      </div>
+
+      <div className="content" style={{ display: "flex", flexDirection: "column", gap: "var(--s-5)", overflowY: "auto" }}>
+        <section style={{ background: "var(--bg-surface)", border: "1px solid var(--bd-default)", borderRadius: 6, padding: "var(--s-5)" }}>
+          <h2 style={{ margin: "0 0 12px", fontSize: 16, fontWeight: 600 }}>Token usage</h2>
+          <div className="settings-stats">
+            <div className="stat"><span className="stat-label">Total tokens</span><span className="stat-value">{tokens.total.toLocaleString()}</span><span className="stat-delta">{aiHistory.length} analysis{aiHistory.length === 1 ? "" : "es"}</span></div>
+            <div className="stat"><span className="stat-label">Prompt (in)</span><span className="stat-value">{tokens.prompt.toLocaleString()}</span><span className="stat-delta">sent to OpenAI</span></div>
+            <div className="stat"><span className="stat-label">Output (out)</span><span className="stat-value">{tokens.completion.toLocaleString()}</span><span className="stat-delta">generated</span></div>
+          </div>
+        </section>
+
+        {aiHistory.length === 0 ? (
+          <div className="empty" style={{ background: "var(--bg-surface)", border: "1px solid var(--bd-default)", borderRadius: 6, padding: "var(--s-10)" }}>
+            <div className="empty-icon"><Icon name="spark" /></div>
+            <h3>No analyses yet</h3>
+            <p>Use “Analyse with AI” on the Study page. Each run is logged here with its token usage.</p>
+            <button className="btn btn-primary" style={{ marginTop: 12 }} onClick={() => onNavigate?.("study")}>Go to Study</button>
+          </div>
+        ) : (
+          <div style={{ display: "grid", gridTemplateColumns: "300px 1fr", gap: "var(--s-5)", alignItems: "start" }}>
+            <section style={{ background: "var(--bg-surface)", border: "1px solid var(--bd-default)", borderRadius: 6, overflow: "hidden" }}>
+              {aiHistory.map((r, i) => (
+                <button key={r.id} onClick={() => setSelId(r.id)} style={{ display: "block", width: "100%", textAlign: "left", padding: "10px 12px", borderTop: i ? "1px solid var(--bd-subtle)" : "none", background: selected?.id === r.id ? "var(--accent-soft)" : "transparent", cursor: "pointer", border: "none", borderLeft: selected?.id === r.id ? "3px solid var(--accent)" : "3px solid transparent" }}>
+                  <div style={{ fontSize: 13, fontWeight: 500, color: "var(--fg-primary)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{r.question ? r.question : r.subject}</div>
+                  <div style={{ fontSize: 11, color: "var(--fg-tertiary)", marginTop: 2 }}>{fmtClock(r.at)} · {r.subject}{r.tokens ? ` · ${r.tokens.total} tok` : ""}</div>
+                </button>
+              ))}
+            </section>
+
+            <section style={{ background: "var(--bg-surface)", border: "1px solid var(--bd-default)", borderRadius: 6, padding: "var(--s-5)", minWidth: 0 }}>
+              {selected && (
+                <>
+                  <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap", marginBottom: 6 }}>
+                    <h2 style={{ margin: 0, fontSize: 15, fontWeight: 600 }}>{selected.subject}</h2>
+                    {selected.model && <span className="badge neutral" style={{ fontSize: 10 }}>{selected.model}</span>}
+                    {selected.tokens && <span className="badge info" style={{ fontSize: 10 }} title={`${selected.tokens.prompt} in / ${selected.tokens.completion} out`}>{selected.tokens.total} tokens</span>}
+                  </div>
+                  <div style={{ fontSize: 11, color: "var(--fg-tertiary)", marginBottom: 12 }}>
+                    {fmtClock(selected.at)}
+                    {selected.fileCount ? ` · ${selected.readCount != null ? selected.readCount : selected.fileCount}/${selected.fileCount} material${selected.fileCount === 1 ? "" : "s"} read` : ""}
+                    {selected.fileNames && selected.fileNames.length ? ` · ${selected.fileNames.join(", ")}` : ""}
+                  </div>
+                  {selected.question && <div style={{ fontSize: 13, fontStyle: "italic", color: "var(--fg-secondary)", padding: "8px 12px", background: "var(--bg-app)", borderRadius: 6, marginBottom: 12 }}>“{selected.question}”</div>}
+                  {window.Legal?.Markdown
+                    ? <window.Legal.Markdown text={selected.output} />
+                    : <div style={{ fontSize: 13, color: "var(--fg-secondary)", whiteSpace: "pre-wrap" }}>{selected.output}</div>}
+                </>
+              )}
+            </section>
+          </div>
+        )}
+      </div>
+    </>
+  );
+};
+
+window.Views = { Dashboard, CoursesView, CalendarView, NotesView, GradesView, TotalGradesView, CourseDetail, Inspector, SettingsView, LibraryView, StudyView, AiHistoryView, Onboarding };

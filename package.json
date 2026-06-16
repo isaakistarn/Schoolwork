@@ -1,6 +1,6 @@
 {
   "name": "schoolwork-dashboard",
-  "version": "0.3.7",
+  "version": "0.4.0",
   "description": "Schoolwork — a desktop study planner for Senior Secondary students. Electron-packaged app with local accounts, per-term profiles, and Google Calendar sync.",
   "main": "main.js",
   "author": "Isaak Simpson",
@@ -16,7 +16,8 @@
   "dependencies": {
     "@supabase/supabase-js": "^2.106.2",
     "electron-updater": "^6.8.3",
-    "googleapis": "^144.0.0"
+    "googleapis": "^144.0.0",
+    "pdf-parse": "^2.4.5"
   },
   "devDependencies": {
     "electron": "^31.3.1",
@@ -26,7 +27,11 @@
     "appId": "au.com.cudesign.schoolwork",
     "productName": "Schoolwork",
     "publish": [
-      { "provider": "github", "owner": "isaakistarn", "repo": "Schoolwork" }
+      {
+        "provider": "github",
+        "owner": "isaakistarn",
+        "repo": "Schoolwork"
+      }
     ],
     "files": [
       "main.js",
@@ -40,6 +45,9 @@
       "app/**/*",
       "!app/screenshots",
       "!app/scraps"
+    ],
+    "asarUnpack": [
+      "**/node_modules/pdf-parse/**"
     ],
     "directories": {
       "output": "dist"
